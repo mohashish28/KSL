@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>KSL</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg1:#000; --bg2:#000; --panel:rgba(0,0,0,.82); --line:rgba(255,255,255,.18);
+  --text:#fff; --muted:#9a9a9a; --accent:#fff; --track:rgba(255,255,255,.22);
+  box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:radial-gradient(120% 90% at 30% 20%,var(--bg1),var(--bg2));color:var(--text);font-family:"DM Sans",system-ui,sans-serif;overflow:hidden;touch-action:none;user-select:none}
+#stage{position:fixed;inset:0}
+canvas{display:block;width:100%;height:100%;cursor:grab}
+canvas.drag{cursor:grabbing}
+#hint{position:fixed;left:24px;top:calc(20px + env(safe-area-inset-top,0px));pointer-events:none}
+#hint h1{font:700 22px/1.1 "Bricolage Grotesque",system-ui,sans-serif;margin:0 0 6px;letter-spacing:-.01em}
+#hint p{margin:0;color:var(--muted);font-size:13px;line-height:1.45;max-width:260px}
+#panel{position:fixed;right:18px;top:18px;width:290px;background:var(--panel);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border:1px solid var(--line);border-radius:18px;padding:16px 16px 14px;max-height:calc(100% - 36px);overflow:auto;touch-action:pan-y}
+#panel h2{font:700 15px "Bricolage Grotesque",sans-serif;margin:0 0 12px;display:flex;justify-content:space-between;align-items:center}
+.row{margin-bottom:13px}
+.row label{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);margin-bottom:6px}
+.row label b{color:var(--text);font-weight:500;font-variant-numeric:tabular-nums}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:5px;border-radius:5px;background:linear-gradient(90deg,var(--accent) var(--p,50%),var(--track) var(--p,50%));outline:none;margin:0}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:var(--accent);border:3px solid #000;box-shadow:0 0 0 1px var(--accent);cursor:pointer}
+input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);border:3px solid #000;cursor:pointer}
+input[type=range]:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.sep{height:1px;background:var(--line);margin:14px 0}
+#pad{position:relative;height:96px;border-radius:12px;border:1px solid var(--line);background:radial-gradient(circle at var(--x,50%) var(--y,50%),rgba(255,255,255,.3),rgba(255,255,255,.03) 60%);cursor:crosshair;touch-action:none}
+#pad i{position:absolute;left:var(--x,50%);top:var(--y,50%);width:16px;height:16px;margin:-8px;border-radius:50%;background:var(--accent);box-shadow:0 0 18px 4px rgba(255,255,255,.55)}
+.btns{display:flex;gap:8px;margin-top:4px}
+button{flex:1;background:rgba(255,255,255,.08);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:9px 10px;font:500 13px "DM Sans",sans-serif;cursor:pointer}
+button:hover{background:rgba(255,255,255,.15)}
+#toggle{flex:none;padding:4px 9px;font-size:12px}
+#drop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.88);border:3px dashed var(--accent);margin:14px;border-radius:24px;font:700 28px "Bricolage Grotesque",sans-serif;z-index:5;pointer-events:none}
+body.over #drop{display:flex}
+@media (max-width:700px){
+  #panel{right:10px;left:10px;top:auto;bottom:calc(10px + env(safe-area-inset-bottom,0px));width:auto;max-height:46%}
+  #hint{left:16px}
+}
+#panel.min .body{display:none}
+#cam{position:fixed;left:18px;bottom:calc(18px + env(safe-area-inset-bottom,0px));width:200px;height:150px;border-radius:14px;overflow:hidden;border:1px solid var(--line);background:#000;display:none;z-index:4}
+#cam .m{position:absolute;inset:0;transform:scaleX(-1)}
+#cam video,#cam canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#cam video{opacity:0}
+#hc{position:fixed;left:0;top:0;width:30px;height:30px;margin:-15px;border-radius:50%;border:2px solid #fff;pointer-events:none;display:none;z-index:6;transition:background .1s,transform .1s}
+#hc[data-l]::after{content:attr(data-l);position:absolute;left:50%;top:38px;transform:translateX(-50%);font:500 12px 'DM Sans',sans-serif;color:#fff;white-space:nowrap}
+#hc.on{background:rgba(255,255,255,.85);transform:scale(.7)}
+#stat{font-size:12px;color:var(--muted);line-height:1.4;margin-top:10px}
+@media (max-width:700px){#cam{bottom:auto;top:96px;left:12px;width:140px;height:105px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="hint"><h1>KSL</h1><p>Drop an image or a .glb model anywhere. Drag the model to move it. Drag the paper to bend it, drag the background to turn it, scroll to zoom.</p></div>
+<div id="drop">Drop your image</div>
+<div id="cam"><div class="m"><video id="vid" playsinline muted></video><canvas id="ov" width="320" height="240"></canvas></div></div>
+<div id="hc"></div>
+
+<div id="panel">
+  <h2>Studio controls <button id="toggle" aria-label="Collapse controls">Hide</button></h2>
+  <div class="body">
+    <div class="row"><label>Zoom <b id="vZoom">100%</b></label><input id="zoomS" type="range" min="0" max="1" step="0.001" value="0.6"></div>
+    <div class="row"><label>Light position</label><div id="pad"><i></i></div></div>
+    <div class="row"><label>Light intensity <b id="vLight">1.00</b></label><input id="light" type="range" min="0" max="2.5" step="0.01" value="1.1"></div>
+    <div class="row"><label>Ambient <b id="vAmb">0.30</b></label><input id="amb" type="range" min="0" max="1" step="0.01" value="0.3"></div>
+    <div class="row"><label>Gloss <b id="vGloss">0.35</b></label><input id="gloss" type="range" min="0" max="1.5" step="0.01" value="0.35"></div>
+    <div class="sep"></div>
+    <div class="row"><label>Pixel filter <b id="vPix">0%</b></label><input id="pix" type="range" min="0" max="1" step="0.005" value="0"></div>
+    <div class="row"><label>Halftone <b id="vHalf">0%</b></label><input id="half" type="range" min="0" max="1" step="0.005" value="0"></div>
+    <div class="row"><label>Halftone dot size <b id="vHS">40%</b></label><input id="hs" type="range" min="0" max="1" step="0.005" value="0.4"></div>
+    <div class="row"><label>Fire <b id="vFire">0%</b></label><input id="fire" type="range" min="0" max="1" step="0.002" value="0"></div>
+    <div class="row"><label>Flame length <b id="vFlame">25%</b></label><input id="flame" type="range" min="0" max="1" step="0.005" value="0.25"></div>
+    <div class="row"><label>Wind <b id="vWind">0.50</b></label><input id="wind" type="range" min="0" max="2" step="0.01" value="0.5"></div>
+    <div class="row"><label>Paper softness <b id="vSoft">1.0</b></label><input id="soft" type="range" min="0.4" max="2.4" step="0.01" value="1.1"></div>
+    <div class="sep"></div>
+    <div class="row"><label>Selected model size <b id="vMS">100%</b></label><input id="msize" type="range" min="0.2" max="3" step="0.01" value="1"></div>
+    <div class="btns"><button id="openModel">Add 3D model (.glb)</button><button id="spin">Stop spinning</button></div>
+    <div class="btns"><button id="rmModel">Remove selected</button><button id="drop3d">Drop models</button></div>
+    <div id="mlist" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
+    <div id="mstat" class="stat2" style="font-size:12px;color:var(--muted);line-height:1.4;margin:8px 0 12px">Drop one or more .glb files anywhere or use the button. Drag the model to move it on X and Y.</div>
+    <div class="btns"><button id="open">Choose image</button><button id="reset">Reset view</button></div>
+    <div class="btns"><button id="shred">Shred poster</button><button id="hand">Hand control</button></div>
+    <div id="stat">Use your webcam: pinch thumb and index finger to grab and drag. Zoom: pinch with both hands and spread, or hold up two fingers and move your hand toward or away from the camera.</div>
+  </div>
+</div>
+<input id="file" type="file" accept="image/*" hidden>
+<input id="fileM" type="file" accept=".glb,model/gltf-binary" multiple hidden>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script>
+(function(){
+  var stage=document.getElementById('stage');
+  var renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  stage.appendChild(renderer.domElement);
+  var canvas=renderer.domElement;
+  var scene=new THREE.Scene();
+  var camera=new THREE.PerspectiveCamera(38,1,0.1,50);
+  var ZMIN=2.2, ZMAX=30, camZ=8.5, camZT=8.5; camera.position.set(0,0,camZ);
+  var group=new THREE.Group(); scene.add(group);
+
+  var vert=[
+  'uniform vec2 uGrab; uniform vec3 uPull; uniform float uRadius; uniform float uTime; uniform float uWind;',
+  'varying vec2 vUv; varying vec2 vLP; varying vec3 vWPos; varying vec3 vN;',
+  'vec3 deform(vec3 p){',
+  '  vec2 d=p.xy-uGrab; float r=length(d)/uRadius; float f=exp(-pow(r,1.6));',
+  '  float L=length(uPull); vec3 q=p; q.z+=uPull.z*f; q.xy+=uPull.xy*f*0.4; q.xy-=d*0.1*uPull.z*uPull.z/(uRadius*uRadius+0.5)*f;',
+  '  q.z+=0.035*L*sin(length(d)*9.0)*f*smoothstep(0.,1.,r);',
+  '  q.z+=0.025*(sin(p.x*2.3+uTime*1.3)+sin(p.y*1.9+uTime*0.9));',
+  '  float gust=0.65+0.35*sin(uTime*0.7)*sin(uTime*0.31+1.0);',
+  '  float w=uWind*gust;',
+  '  float ph=p.x*1.6+p.y*0.7-uTime*(1.5+2.5*uWind);',
+  '  q.z+=w*(0.2*sin(ph)+0.11*sin(p.x*3.1-p.y*1.7-uTime*4.3)+0.05*sin(p.y*5.0+p.x*2.0-uTime*6.5)+0.12);',
+  '  q.x-=w*0.03*(1.0+sin(ph));',
+  '  return q; }',
+  'void main(){ vUv=uv; vLP=position.xy; float e=0.02;',
+  '  vec3 a=deform(position), b=deform(position+vec3(e,0.,0.)), c=deform(position+vec3(0.,e,0.));',
+  '  vec3 n=normalize(cross(b-a,c-a));',
+  '  vN=normalize(mat3(modelMatrix)*n);',
+  '  vWPos=(modelMatrix*vec4(a,1.)).xyz;',
+  '  gl_Position=projectionMatrix*viewMatrix*vec4(vWPos,1.); }'
+  ].join('\n');
+
+  var frag=[
+  'uniform sampler2D uMap; uniform vec3 uLightPos; uniform float uLight,uAmb,uGloss,uPix,uHalf,uHSize,uFire,uFlame,uTime; uniform vec2 uSize;',
+  'varying vec2 vUv; varying vec3 vWPos; varying vec3 vN;',
+  'float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }',
+  'float vn(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f); return mix(mix(hash(i),hash(i+vec2(1.0,0.0)),f.x),mix(hash(i+vec2(0.0,1.0)),hash(i+vec2(1.0,1.0)),f.x),f.y); }',
+  'float fbm(vec2 p){ float a=0.5,s=0.0; for(int i=0;i<4;i++){ s+=a*vn(p); p=p*2.03+7.1; a*=0.5; } return s; }',
+  'void main(){',
+  '  vec2 uv=vUv;',
+  '  if(uPix>0.01){ float cells=exp(mix(log(500.),log(12.),uPix)); vec2 g=uSize/min(uSize.x,uSize.y)*cells; uv=(floor(uv*g)+0.5)/g; }',
+  '  vec3 col=texture2D(uMap,uv).rgb;',
+  '  if(uHalf>0.01){',
+  '    float cells=exp(mix(log(150.),log(22.),uHSize)); vec2 gs=uSize/min(uSize.x,uSize.y)*cells;',
+  '    mat2 R=mat2(0.7071,-0.7071,0.7071,0.7071);',
+  '    vec2 q=R*(vUv*gs); vec2 cell=floor(q)+0.5; vec2 f=q-cell;',
+  '    vec2 cuv=clamp((cell*R)/gs,0.,1.);',
+  '    vec3 c=texture2D(uMap,cuv).rgb;',
+  '    float lum=dot(c,vec3(0.299,0.587,0.114)); float sat=max(c.r,max(c.g,c.b))-min(c.r,min(c.g,c.b));',
+  '    float cov=clamp(1.0-lum*0.85+sat*0.5,0.,1.);',
+  '    float rad=sqrt(cov)*0.78; float m=smoothstep(rad+0.07,rad-0.07,length(f));',
+  '    vec3 ink=clamp((c-lum)*1.25+lum*0.85,0.,1.);',
+  '    vec3 h=mix(vec3(0.96,0.94,0.9),ink,m);',
+  '    col=mix(col,h,uHalf);',
+  '  }',
+  '  float fd=1.0,charA=0.0,emA=0.0,fl=-1.0; vec3 flc=vec3(0.0);',
+  '  if(uFire>0.005){',
+  '    float b=vUv.y*0.72+fbm(vUv*uSize*1.8+3.7)*0.42;',
+  '    fd=b-uFire*1.12;',
+  '    if(fd<0.0) discard;',
+  '    float h=0.02+0.3*uFlame;',
+  '    fl=fbm(vUv*uSize*vec2(3.0,1.4)+vec2(0.0,-uTime*1.9))*1.2+0.1-fd/h;',
+  '    float k=clamp(fl*1.7,0.0,1.0);',
+  '    flc=mix(vec3(0.85,0.1,0.02),vec3(1.0,0.6,0.1),smoothstep(0.0,0.45,k));',
+  '    flc=mix(flc,vec3(1.0,0.95,0.7),smoothstep(0.6,1.0,k));',
+  '    charA=1.0-smoothstep(0.02,0.16,fd);',
+  '    emA=(1.0-smoothstep(0.0,0.035,fd))*(0.75+0.25*sin(uTime*9.0+vUv.x*40.0));',
+  '  }',
+  '  vec3 n=normalize(vN);',
+  '  if(!gl_FrontFacing){ n=-n; col=vec3(0.92,0.9,0.85); }',
+  '  float gr=hash(floor(vUv*uSize*160.));',
+  '  n=normalize(n+vec3(gr-0.5,hash(vUv*91.7+3.1)-0.5,0.)*0.06);',
+  '  vec3 L=normalize(uLightPos-vWPos), V=normalize(cameraPosition-vWPos), H=normalize(L+V);',
+  '  float dif=max(dot(n,L),0.);',
+  '  float spec=pow(max(dot(n,H),0.),40.)*uGloss*uLight;',
+  '  col*=0.96+0.08*gr;',
+  '  col=mix(col,vec3(0.05,0.035,0.03),charA*0.95);',
+  '  col=mix(col,col*vec3(1.25,0.75,0.45),(1.0-smoothstep(0.1,0.4,fd)));',
+  '  vec3 outc=col*(uAmb+dif*uLight)+spec*vec3(1.,0.96,0.88);',
+  '  float fa=clamp(fl*6.0,0.0,1.0);',
+  '  outc+=vec3(1.0,0.45,0.08)*emA*1.5;',
+  '  outc+=vec3(0.25,0.1,0.02)*uFire*(0.8+0.2*sin(uTime*13.0));',
+  '  gl_FragColor=vec4(clamp(outc,0.,1.5),1.); }'
+  ].join('\n');
+
+  var uniforms={
+    uMap:{value:null}, uGrab:{value:new THREE.Vector2()}, uPull:{value:new THREE.Vector3()},
+    uRadius:{value:1.1}, uTime:{value:0}, uLightPos:{value:new THREE.Vector3(1.5,1.5,4)},
+    uLight:{value:1.1}, uAmb:{value:0.3}, uGloss:{value:0.35}, uPix:{value:0}, uHalf:{value:0}, uFire:{value:0}, uFlame:{value:0.25}, uHSize:{value:0.4}, uWind:{value:0.5}, uSize:{value:new THREE.Vector2(3,4)}
+  };
+  var mat=new THREE.ShaderMaterial({uniforms:uniforms,vertexShader:vert,fragmentShader:frag,side:THREE.DoubleSide});
+  var poster=new THREE.Mesh(new THREE.PlaneGeometry(1,1),mat); group.add(poster);
+  var fragF=[
+  'uniform float uFire,uFlame,uTime; uniform vec2 uSize; varying vec2 vLP;',
+  'float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }',
+  'float vn(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f); return mix(mix(hash(i),hash(i+vec2(1.0,0.0)),f.x),mix(hash(i+vec2(0.0,1.0)),hash(i+vec2(1.0,1.0)),f.x),f.y); }',
+  'float fbm(vec2 p){ float a=0.5,s=0.0; for(int i=0;i<4;i++){ s+=a*vn(p); p=p*2.03+7.1; a*=0.5; } return s; }',
+  'void main(){',
+  '  if(uFire<0.005) discard;',
+  '  vec2 puv=vLP/uSize+0.5;',
+  '  vec2 cp=vec2(puv.x,max(puv.y,0.0));',
+  '  float b=cp.y*0.72+fbm(cp*uSize*1.8+3.7)*0.42;',
+  '  float fd=b-uFire*1.12;',
+  '  float h=0.02+0.3*uFlame;',
+  '  float dist=fd>0.0?fd/h:-fd/(h*0.05);',
+  '  float ox=max(0.0,abs(puv.x-0.5)-0.5);',
+  '  float side=(1.0-smoothstep(0.0,0.3,ox))*(1.0-smoothstep(0.0,0.07,-puv.y));',
+  '  float fl=fbm(puv*uSize*vec2(3.0,1.4)+vec2(0.0,-uTime*1.9))*1.2+0.1-dist-(1.0-side)*1.5;',
+  '  float glow=(1.0-smoothstep(0.0,2.5,dist))*0.2*side*smoothstep(-0.012,0.0,fd);',
+  '  float a=clamp(fl*6.0,0.0,1.0);',
+  '  if(a<=0.0&&glow<0.01) discard;',
+  '  float k=clamp(fl*1.7,0.0,1.0);',
+  '  vec3 flc=mix(vec3(0.85,0.1,0.02),vec3(1.0,0.6,0.1),smoothstep(0.0,0.45,k));',
+  '  flc=mix(flc,vec3(1.0,0.95,0.7),smoothstep(0.6,1.0,k));',
+  '  gl_FragColor=vec4(flc*a+vec3(1.0,0.4,0.05)*glow,1.0); }'
+  ].join('\n');
+  var flameMat=new THREE.ShaderMaterial({uniforms:uniforms,vertexShader:vert,fragmentShader:fragF,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide});
+  var flameMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,1),flameMat); flameMesh.position.z=0.05; flameMesh.renderOrder=2; flameMesh.raycast=function(){}; group.add(flameMesh);
+
+  var W=3,H=4;
+
+  // soft shadow on an imaginary wall
+  var sc=document.createElement('canvas'); sc.width=sc.height=256;
+  var sx=sc.getContext('2d'); sx.shadowColor='#000'; sx.shadowBlur=36; sx.shadowOffsetX=1000;
+  sx.fillRect(-1000+40,40,176+40,176+40);
+  var shTex=new THREE.CanvasTexture(sc);
+  var shadow=new THREE.Mesh(new THREE.PlaneGeometry(1,1),new THREE.MeshBasicMaterial({map:shTex,transparent:true,opacity:.5,depthWrite:false}));
+  shadow.position.z=-1.3; scene.add(shadow);
+
+  function setImage(img){
+    var tex=new THREE.Texture(img); tex.needsUpdate=true; tex.minFilter=THREE.LinearMipmapLinearFilter;
+    tex.anisotropy=renderer.capabilities.getMaxAnisotropy();
+    if(uniforms.uMap.value) uniforms.uMap.value.dispose();
+    uniforms.uMap.value=tex;
+    var ar=img.width/img.height, maxW=3.6, maxH=4.4;
+    H=maxH; W=H*ar; if(W>maxW){W=maxW;H=W/ar;}
+    poster.geometry.dispose();
+    poster.geometry=new THREE.PlaneGeometry(W,H,Math.max(20,Math.round(W*30)),Math.max(20,Math.round(H*30)));
+    uniforms.uSize.value.set(W,H);
+    if(shred) restoreShred();
+    flameMesh.geometry.dispose(); flameMesh.geometry=new THREE.PlaneGeometry(W*1.6,H*2,Math.round(W*24),Math.round(H*2*24));
+    shadow.scale.set(W*1.15,H*1.15,1);
+  }
+
+  // default sample poster
+  (function(){
+    var c=document.createElement('canvas'); c.width=800; c.height=1100; var x=c.getContext('2d');
+    x.fillStyle='#000'; x.fillRect(0,0,800,1100);
+    x.fillStyle='#fff'; x.font='700 112px sans-serif'; x.textAlign='center'; x.textBaseline='middle';
+    x.fillText('DROP YOUR',400,490); x.fillText('POSTER',400,620);
+    setImage(c);
+  })();
+
+  function loadFile(f){
+    if(f&&/\.glb$/i.test(f.name)){loadModel(f);return;}
+    if(!f||!/^image\//.test(f.type)) return;
+    var url=URL.createObjectURL(f), im=new Image();
+    im.onload=function(){setImage(im); URL.revokeObjectURL(url);};
+    im.src=url;
+  }
+  var over=0;
+  window.addEventListener('dragenter',function(e){e.preventDefault();over++;document.body.classList.add('over');});
+  window.addEventListener('dragleave',function(e){e.preventDefault();if(--over<=0){over=0;document.body.classList.remove('over');}});
+  window.addEventListener('dragover',function(e){e.preventDefault();});
+  window.addEventListener('drop',function(e){e.preventDefault();over=0;document.body.classList.remove('over');Array.prototype.forEach.call(e.dataTransfer.files,loadFile);});
+  var fileIn=document.getElementById('file');
+  document.getElementById('open').onclick=function(){fileIn.click();};
+  fileIn.onchange=function(){loadFile(fileIn.files[0]);fileIn.value='';};
+
+  // ---- 3D model (GLB) ----
+  var models=[], sel=null, spinning=true, mPos0=new THREE.Vector3(), mStart0=new THREE.Vector3();
+  var ambL=new THREE.AmbientLight(0xffffff,0.3); scene.add(ambL);
+  var dirL=new THREE.DirectionalLight(0xffffff,1.1); scene.add(dirL);
+  renderer.outputEncoding=THREE.sRGBEncoding;
+  var mstat=document.getElementById('mstat'), spinBtn=document.getElementById('spin'), mlist=document.getElementById('mlist');
+  var msEl=document.getElementById('msize'), msOut=document.getElementById('vMS');
+  function updSize(){
+    msEl.style.setProperty('--p',(msEl.value-msEl.min)/(msEl.max-msEl.min)*100+'%');
+    msOut.textContent=Math.round(msEl.value*100)+'%';
+    if(sel){ sel.userData.k=+msEl.value; sel.scale.setScalar(sel.userData.base*sel.userData.k); }
+  }
+  msEl.addEventListener('input',updSize);
+  function renderList(){
+    mlist.textContent='';
+    models.forEach(function(m,i){
+      var b=document.createElement('button'); b.textContent=(i+1)+'. '+m.userData.name;
+      b.style.cssText='flex:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:5px 9px;font-size:12px;'+(m===sel?'border-color:#fff;background:rgba(255,255,255,.25)':'');
+      b.onclick=function(){select(m);};
+      mlist.appendChild(b);
+    });
+  }
+  function select(m){
+    sel=m; msEl.disabled=!m;
+    if(m) msEl.value=m.userData.k;
+    updSize(); renderList();
+    if(m) mstat.textContent='Selected: '+m.userData.name+'. Drag it to move, use the slider to resize.';
+  }
+  function disposeModel(m){
+    if(!m) return;
+    group.remove(m);
+    m.traverse(function(o){
+      if(o.geometry) o.geometry.dispose();
+      if(o.material){ (Array.isArray(o.material)?o.material:[o.material]).forEach(function(mm){
+        for(var k in mm){ if(mm[k]&&mm[k].isTexture) mm[k].dispose(); } mm.dispose(); }); }
+    });
+    var i=models.indexOf(m); if(i>=0) models.splice(i,1);
+    if(sel===m) select(models[models.length-1]||null); else renderList();
+  }
+  function loadModel(f){
+    mstat.textContent='Loading '+f.name+'\u2026';
+    var rd=new FileReader();
+    rd.onload=function(){
+      new THREE.GLTFLoader().parse(rd.result,'',function(gltf){
+        var obj=gltf.scene, box=new THREE.Box3().setFromObject(obj), size=box.getSize(new THREE.Vector3()), ctr=box.getCenter(new THREE.Vector3());
+        obj.position.sub(ctr);
+        var inner=new THREE.Group(); inner.add(obj);
+        var m=new THREE.Group(); m.add(inner);
+        m.userData={name:f.name.replace(/\.glb$/i,''),base:2/Math.max(size.x,size.y,size.z,1e-6),k:1,dims:size.clone()};
+        m.scale.setScalar(m.userData.base);
+        var n=models.length;
+        m.position.set(-W*0.3+(n%4)*W*0.2,-H*0.2+Math.floor(n/4)*0.6,1.0);
+        if(gravityOn){m.userData.home=m.position.clone(); m.userData.vy=0;} group.add(m); models.push(m); select(m);
+      },function(err){ mstat.textContent='Could not read '+f.name+'. Please use a valid .glb.'; });
+    };
+    rd.readAsArrayBuffer(f);
+  }
+  var fileM=document.getElementById('fileM');
+  document.getElementById('openModel').onclick=function(){fileM.click();};
+  fileM.onchange=function(){ Array.prototype.forEach.call(fileM.files,loadModel); fileM.value=''; };
+  document.getElementById('rmModel').onclick=function(){ disposeModel(sel); if(!models.length) mstat.textContent='No models. Drop or add a .glb.'; };
+  spinBtn.onclick=function(){ spinning=!spinning; spinBtn.textContent=spinning?'Stop spinning':'Start spinning'; };
+  var gravityOn=false, _bx=new THREE.Box3(), _wp=new THREE.Vector3();
+  var dropBtn=document.getElementById('drop3d');
+  dropBtn.onclick=function(){
+    gravityOn=!gravityOn;
+    if(gravityOn){
+      models.forEach(function(m){ m.userData.home=m.position.clone(); m.userData.vx=0; m.userData.vy=0; });
+      dropBtn.textContent='Reset positions';
+      mstat.textContent='Models fall, collide by their real size and stack on the bottom edge. Drag one to pick it up and drop it again.';
+    } else {
+      models.forEach(function(m){ if(m.userData.home) m.position.copy(m.userData.home); m.userData.vx=0; m.userData.vy=0; });
+      dropBtn.textContent='Drop models';
+    }
+  };
+  function stepGravity(dt){
+    group.updateMatrixWorld(true);
+    var n=models.length; if(!n) return;
+    var P=[],HX=[],HY=[],S=[],i,j,it,st,SUB=3,h=dt/SUB,E=0.25;
+    for(i=0;i<n;i++){
+      var m=models[i],u=m.userData;
+      if(u.vx===undefined){u.vx=0;} if(u.vy===undefined){u.vy=0;}
+      var wp=new THREE.Vector3(); m.getWorldPosition(wp); P.push(wp);
+      // tight half-extents from the real bounding box, accounting for the current spin
+      var sc=u.base*u.k, th=m.children[0].rotation.y, c=Math.abs(Math.cos(th)), sn=Math.abs(Math.sin(th));
+      HX.push(0.5*sc*(c*u.dims.x+sn*u.dims.z)); HY.push(0.5*sc*u.dims.y);
+      S.push(mode==='model'&&sel===m);
+      if(S[i]){u.vx=0;u.vy=0;}
+    }
+    for(st=0;st<SUB;st++){
+      for(i=0;i<n;i++){ if(S[i]) continue; var u1=models[i].userData; u1.vy-=18*h; P[i].x+=u1.vx*h; P[i].y+=u1.vy*h; }
+      for(it=0;it<4;it++){
+        for(i=0;i<n;i++){
+          if(S[i]) continue;
+          var u2=models[i].userData, depth=camera.position.z-P[i].z;
+          var fy=-depth*tanHalf+HY[i], hw=depth*tanHalf*camera.aspect-HX[i];
+          if(P[i].y<fy){ P[i].y=fy; if(u2.vy<0) u2.vy=u2.vy<-1.2?-u2.vy*0.3:0; u2.vx*=0.94; }
+          if(P[i].x<-hw){ P[i].x=-hw; if(u2.vx<0) u2.vx=-u2.vx*0.3; }
+          if(P[i].x>hw){ P[i].x=hw; if(u2.vx>0) u2.vx=-u2.vx*0.3; }
+        }
+        for(i=0;i<n;i++) for(j=i+1;j<n;j++){
+          var dx=P[j].x-P[i].x, dy=P[j].y-P[i].y;
+          var ox=HX[i]+HX[j]-Math.abs(dx), oy=HY[i]+HY[j]-Math.abs(dy);
+          if(ox<=0||oy<=0) continue;
+          var ia=S[i]?0:1/(HX[i]*HY[i]+1e-6), ib=S[j]?0:1/(HX[j]*HY[j]+1e-6), is=ia+ib; if(is===0) continue;
+          var nx=0,ny=0,pen;
+          if(oy<=ox){ ny=dy>=0?1:-1; pen=oy; if(Math.abs(dy)<1e-4) ny=(i<j?1:-1); }
+          else { nx=dx>=0?1:-1; pen=ox; }
+          P[i].x-=nx*pen*ia/is; P[i].y-=ny*pen*ia/is;
+          P[j].x+=nx*pen*ib/is; P[j].y+=ny*pen*ib/is;
+          var ui=models[i].userData, uj=models[j].userData;
+          var vn=(uj.vx-ui.vx)*nx+(uj.vy-ui.vy)*ny;
+          if(vn<0){
+            var jm=-(1+E)*vn/is;
+            ui.vx-=jm*ia*nx; ui.vy-=jm*ia*ny; uj.vx+=jm*ib*nx; uj.vy+=jm*ib*ny;
+          }
+          if(ny!==0){ var fr=Math.pow(0.9,dt*60/SUB); ui.vx*=fr; uj.vx*=fr; }
+        }
+      }
+    }
+    for(i=0;i<n;i++){ if(!S[i]) models[i].position.copy(group.worldToLocal(P[i].clone())); }
+  }
+  select(null);
+
+  // ---- GUI ----
+  function bind(id,out,fmt,fn){
+    var el=document.getElementById(id), o=document.getElementById(out);
+    function u(){var p=(el.value-el.min)/(el.max-el.min)*100; el.style.setProperty('--p',p+'%'); o.textContent=fmt(+el.value); fn(+el.value);}
+    el.addEventListener('input',u); u();
+  }
+  bind('light','vLight',function(v){return v.toFixed(2)},function(v){uniforms.uLight.value=v;});
+  bind('amb','vAmb',function(v){return v.toFixed(2)},function(v){uniforms.uAmb.value=v;});
+  bind('gloss','vGloss',function(v){return v.toFixed(2)},function(v){uniforms.uGloss.value=v;});
+  bind('pix','vPix',function(v){return Math.round(v*100)+'%'},function(v){uniforms.uPix.value=v;});
+  bind('soft','vSoft',function(v){return v.toFixed(1)},function(v){uniforms.uRadius.value=v;});
+  bind('half','vHalf',function(v){return Math.round(v*100)+'%'},function(v){uniforms.uHalf.value=v;});
+  bind('hs','vHS',function(v){return Math.round(v*100)+'%'},function(v){uniforms.uHSize.value=v;});
+  bind('fire','vFire',function(v){return Math.round(v*100)+'%'},function(v){uniforms.uFire.value=v;});
+  bind('flame','vFlame',function(v){return Math.round(v*100)+'%'},function(v){uniforms.uFlame.value=v;});
+  bind('wind','vWind',function(v){return v.toFixed(2)},function(v){uniforms.uWind.value=v;});
+
+  var pad=document.getElementById('pad'), lp={x:.7,y:.25};
+  function setPad(e){
+    var r=pad.getBoundingClientRect();
+    lp.x=Math.min(1,Math.max(0,(e.clientX-r.left)/r.width)); lp.y=Math.min(1,Math.max(0,(e.clientY-r.top)/r.height));
+    pad.style.setProperty('--x',lp.x*100+'%'); pad.style.setProperty('--y',lp.y*100+'%');
+    uniforms.uLightPos.value.set((lp.x-.5)*9,-(lp.y-.5)*7,3.6);
+  }
+  var padDown=false;
+  pad.addEventListener('pointerdown',function(e){padDown=true;pad.setPointerCapture(e.pointerId);setPad(e);});
+  pad.addEventListener('pointermove',function(e){if(padDown)setPad(e);});
+  pad.addEventListener('pointerup',function(){padDown=false;});
+  setPad({clientX:pad.getBoundingClientRect().left+pad.offsetWidth*.7,clientY:pad.getBoundingClientRect().top+pad.offsetHeight*.25});
+
+  var panel=document.getElementById('panel'), tg=document.getElementById('toggle');
+  tg.onclick=function(){panel.classList.toggle('min');tg.textContent=panel.classList.contains('min')?'Show':'Hide';};
+
+  // ---- interaction ----
+  var rot={x:0,y:0}, rotT={x:0,y:0}, mode=null, start=new THREE.Vector3(), lastX=0, lastY=0;
+  var pull=new THREE.Vector3(), vel=new THREE.Vector3(), target=new THREE.Vector3();
+  var wStart=new THREE.Vector3(), wCur=new THREE.Vector3(), wd=new THREE.Vector3(), dirV=new THREE.Vector3(), dragPlane=new THREE.Plane(), ray=new THREE.Raycaster(), inv=new THREE.Matrix4(), ndc=new THREE.Vector2();
+  function localHit(e){
+    var r=canvas.getBoundingClientRect();
+    ndc.set((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1);
+    ray.setFromCamera(ndc,camera);
+    group.updateMatrixWorld(true); inv.copy(poster.matrixWorld).invert();
+    var o=ray.ray.origin.clone().applyMatrix4(inv), d=ray.ray.direction.clone().transformDirection(inv);
+    if(Math.abs(d.z)<1e-5) return null;
+    var t=-o.z/d.z; return o.add(d.multiplyScalar(t));
+  }
+  canvas.addEventListener('pointerdown',function(e){
+    try{canvas.setPointerCapture(e.pointerId);}catch(_){} canvas.classList.add('drag');
+    lastX=e.clientX; lastY=e.clientY;
+    var r0=canvas.getBoundingClientRect();
+    ndc.set((e.clientX-r0.left)/r0.width*2-1,-((e.clientY-r0.top)/r0.height)*2+1);
+    ray.setFromCamera(ndc,camera); group.updateMatrixWorld(true);
+    var hits=shred?[]:ray.intersectObject(poster);
+    var mh=models.length?ray.intersectObjects(models,true):[];
+    if(mh.length&&(!hits.length||mh[0].distance<hits[0].distance)){
+      mode='model'; wStart.copy(mh[0].point);
+      camera.getWorldDirection(dirV); dragPlane.setFromNormalAndCoplanarPoint(dirV,wStart);
+      var root=mh[0].object; while(root.parent&&root.parent!==group) root=root.parent;
+      select(root); mStart0.copy(group.worldToLocal(wStart.clone())); mPos0.copy(root.position);
+    } else if(hits.length){
+      wStart.copy(hits[0].point);
+      var p=poster.worldToLocal(wStart.clone());
+      mode='bend'; start.copy(p); uniforms.uGrab.value.set(p.x,p.y);
+      camera.getWorldDirection(dirV); dragPlane.setFromNormalAndCoplanarPoint(dirV,wStart);
+    } else mode='rotate';
+  });
+  canvas.addEventListener('pointermove',function(e){
+    if(mode==='bend'){
+      var r1=canvas.getBoundingClientRect();
+      ndc.set((e.clientX-r1.left)/r1.width*2-1,-((e.clientY-r1.top)/r1.height)*2+1);
+      ray.setFromCamera(ndc,camera);
+      if(!ray.ray.intersectPlane(dragPlane,wCur)) return;
+      group.updateMatrixWorld(true); inv.copy(poster.matrixWorld).invert();
+      wd.copy(wCur).sub(wStart);
+      var wl=wd.length(); if(wl<1e-6){target.set(0,0,0);return;}
+      var ld=wd.clone().transformDirection(inv).multiplyScalar(wl);
+      var sgn=poster.worldToLocal(camera.position.clone()).z>=0?1:-1;
+      var pl=Math.hypot(ld.x,ld.y), ps=pl>2.6?2.6/pl:1;
+      var zz=ld.z+sgn*pl*ps*0.9;
+      target.set(ld.x*ps,ld.y*ps,Math.max(-2.6,Math.min(2.6,zz)));
+    } else if(mode==='model'&&sel){
+      var r2=canvas.getBoundingClientRect();
+      ndc.set((e.clientX-r2.left)/r2.width*2-1,-((e.clientY-r2.top)/r2.height)*2+1);
+      ray.setFromCamera(ndc,camera);
+      if(!ray.ray.intersectPlane(dragPlane,wCur)) return;
+      group.updateMatrixWorld(true);
+      var lc=group.worldToLocal(wCur.clone());
+      sel.position.x=mPos0.x+lc.x-mStart0.x;
+      sel.position.y=mPos0.y+lc.y-mStart0.y;
+    } else if(mode==='rotate'){
+      rotT.y+=(e.clientX-lastX)*0.008; rotT.x+=(e.clientY-lastY)*0.008;
+      rotT.x=Math.max(-1.2,Math.min(1.2,rotT.x)); lastX=e.clientX; lastY=e.clientY;
+    }
+  });
+  function up(){mode=null;target.set(0,0,0);canvas.classList.remove('drag');}
+  canvas.addEventListener('pointerup',up); canvas.addEventListener('pointercancel',up);
+  canvas.addEventListener('wheel',function(e){e.preventDefault();camZT=Math.max(ZMIN,Math.min(ZMAX,camZT*Math.exp(e.deltaY*(e.ctrlKey?0.012:0.0025))));},{passive:false});
+  document.getElementById('reset').onclick=function(){rotT.x=rotT.y=0;camZT=8.5;};
+
+
+  // ---- hand control (webcam pinch + drag) ----
+  var vid=document.getElementById('vid'), ov=document.getElementById('ov'), ovx=ov.getContext('2d');
+  var camEl=document.getElementById('cam'), hcEl=document.getElementById('hc');
+  var handBtn=document.getElementById('hand'), stat=document.getElementById('stat');
+  var pxc=document.createElement('canvas'); pxc.width=36; pxc.height=27; var pxx=pxc.getContext('2d');
+  var zref=null, zs=0, zCnt=0;
+  var landmarker=null, handOn=false, stream=null, down=false, pinchS=[false,false], zoom=null, sx=0, sy=0, lastT=-1;
+  var VER='0.10.14', BASE='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@'+VER;
+  var MODEL='https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+  function fire(type,x,y){canvas.dispatchEvent(new PointerEvent(type,{clientX:x,clientY:y,pointerId:77,bubbles:true,isPrimary:true}));}
+  function endGrab(){ if(down){fire('pointerup',sx,sy);down=false;} hcEl.classList.remove('on'); }
+  function stopHand(msg){
+    handOn=false; endGrab(); zoom=null;
+    if(stream){stream.getTracks().forEach(function(t){t.stop();});stream=null;}
+    camEl.style.display='none'; hcEl.style.display='none'; handBtn.textContent='Hand control';
+    stat.textContent=msg||'Hand control is off.';
+  }
+  async function startHand(){
+    stat.textContent='Starting camera\u2026';
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:'user'},audio:false});
+      vid.srcObject=stream; await vid.play();
+    }catch(err){ stopHand('Camera is blocked here. Allow camera access, or open the downloaded file locally.'); return; }
+    try{
+      if(!landmarker){
+        stat.textContent='Loading hand model\u2026';
+        var v=await import(BASE+'/vision_bundle.mjs');
+        var fs=await v.FilesetResolver.forVisionTasks(BASE+'/wasm');
+        try{ landmarker=await v.HandLandmarker.createFromOptions(fs,{baseOptions:{modelAssetPath:MODEL,delegate:'GPU'},runningMode:'VIDEO',numHands:2}); }
+        catch(e1){ landmarker=await v.HandLandmarker.createFromOptions(fs,{baseOptions:{modelAssetPath:MODEL,delegate:'CPU'},runningMode:'VIDEO',numHands:2}); }
+      }
+    }catch(err){ stopHand('The hand model could not load in this view (network access is blocked). Open the downloaded file locally to use hand control.'); return; }
+    handOn=true; camEl.style.display='block'; handBtn.textContent='Stop hand control';
+    stat.textContent='Pinch thumb and index to grab and drag. Zoom: pinch with both hands and spread, or hold up two fingers and move your hand toward or away from the camera.';
+    loop();
+  }
+  handBtn.onclick=function(){ if(handOn) stopHand(); else startHand(); };
+  function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
+  function loop(){
+    if(!handOn) return;
+    if(vid.readyState>=2 && vid.currentTime!==lastT){
+      lastT=vid.currentTime;
+      var res=landmarker.detectForVideo(vid,performance.now());
+      track(res.landmarks||[]);
+    }
+    requestAnimationFrame(loop);
+  }
+  function track(hands){
+    pxx.drawImage(vid,0,0,pxc.width,pxc.height);
+    var im=pxx.getImageData(0,0,pxc.width,pxc.height), dd=im.data;
+    for(var q=0;q<dd.length;q+=4){var gy=0.299*dd[q]+0.587*dd[q+1]+0.114*dd[q+2]; dd[q]=dd[q+1]=dd[q+2]=gy;}
+    pxx.putImageData(im,0,0);
+    ovx.imageSmoothingEnabled=false;
+    ovx.drawImage(pxc,0,0,ov.width,ov.height);
+    hands.forEach(function(h){ ovx.fillStyle='#fff'; h.forEach(function(p){ovx.beginPath();ovx.arc(p.x*ov.width,p.y*ov.height,2.5,0,7);ovx.fill();}); });
+    var mids=[], pin=[];
+    hands.forEach(function(h,i){
+      var size=dist(h[0],h[9])||0.1, d=dist(h[4],h[8])/size;
+      pinchS[i]=pinchS[i]?d<0.42:d<0.28; pin.push(pinchS[i]);
+      mids.push({x:(h[4].x+h[8].x)/2,y:(h[4].y+h[8].y)/2});
+    });
+    if(hands.length>=2 && pin[0] && pin[1]){
+      endGrab();
+      var d2=dist(mids[0],mids[1]);
+      if(!zoom) zoom={d:d2,cam:camZT};
+      camZT=Math.max(ZMIN,Math.min(ZMAX,zoom.cam*Math.pow(zoom.d/Math.max(d2,0.02),1.8)));
+      hcEl.style.display='none'; return;
+    }
+    zoom=null;
+    // one-hand zoom: peace sign, push toward camera = zoom in, pull back = zoom out
+    var zp=false, sz0=0.1;
+    if(hands.length){
+      var hz=hands[0]; sz0=dist(hz[0],hz[9])||0.1;
+      var rr=function(i){return dist(hz[0],hz[i])/sz0;};
+      zp=!pin[0] && rr(8)>1.5 && rr(12)>1.5 && rr(16)<1.3 && rr(20)<1.3;
+    }
+    zCnt=zp?Math.min(zCnt+1,6):0;
+    if(zCnt>=4){
+      endGrab();
+      if(!zref){zref={s:sz0,cam:camZT};zs=sz0;}
+      zs+=(sz0-zs)*0.35;
+      camZT=Math.max(ZMIN,Math.min(ZMAX,zref.cam*Math.pow(zref.s/zs,2.2)));
+      var px=(1-hands[0][9].x)*innerWidth, py=hands[0][9].y*innerHeight;
+      if(hcEl.style.display!=='block'){sx=px;sy=py;}
+      sx+=(px-sx)*0.5; sy+=(py-sy)*0.5;
+      hcEl.style.display='block'; hcEl.style.left=sx+'px'; hcEl.style.top=sy+'px';
+      hcEl.setAttribute('data-l',zs>zref.s?'zoom in':'zoom out');
+      return;
+    }
+    zref=null; hcEl.removeAttribute('data-l');
+    if(!hands.length){ endGrab(); hcEl.style.display='none'; return; }
+    var x=(1-mids[0].x)*innerWidth, y=mids[0].y*innerHeight;
+    if(hcEl.style.display!=='block'){sx=x;sy=y;}
+    sx+=(x-sx)*0.5; sy+=(y-sy)*0.5;
+    hcEl.style.display='block'; hcEl.style.left=sx+'px'; hcEl.style.top=sy+'px';
+    if(pin[0]){
+      hcEl.classList.add('on');
+      if(!down){down=true;fire('pointerdown',sx,sy);} else fire('pointermove',sx,sy);
+    } else endGrab();
+  }
+
+  var zoomEl=document.getElementById('zoomS'), zoomOut=document.getElementById('vZoom');
+  zoomEl.addEventListener('input',function(){ camZT=ZMAX*Math.pow(ZMIN/ZMAX,+zoomEl.value); });
+  function syncZoom(){
+    if(document.activeElement===zoomEl) { zoomEl.style.setProperty('--p',zoomEl.value*100+'%'); zoomOut.textContent=Math.round(8.5/camZ*100)+'%'; return; }
+    var v=Math.log(camZ/ZMAX)/Math.log(ZMIN/ZMAX); v=Math.max(0,Math.min(1,v));
+    zoomEl.value=v; zoomEl.style.setProperty('--p',v*100+'%'); zoomOut.textContent=Math.round(8.5/camZ*100)+'%';
+  }
+  // two-finger pinch zoom on touch screens
+  var tp={}, pd0=1, pz0=1;
+  function tpd(){var k=Object.keys(tp);return Math.hypot(tp[k[0]].x-tp[k[1]].x,tp[k[0]].y-tp[k[1]].y);}
+  canvas.addEventListener('pointerdown',function(e){
+    if(e.pointerType!=='touch') return; tp[e.pointerId]={x:e.clientX,y:e.clientY};
+    if(Object.keys(tp).length===2){ mode=null; target.set(0,0,0); pd0=Math.max(tpd(),10); pz0=camZT; }
+  });
+  canvas.addEventListener('pointermove',function(e){
+    if(!tp[e.pointerId]) return; tp[e.pointerId]={x:e.clientX,y:e.clientY};
+    if(Object.keys(tp).length===2) camZT=Math.max(ZMIN,Math.min(ZMAX,pz0*pd0/Math.max(tpd(),10)));
+  });
+  function tpUp(e){delete tp[e.pointerId];}
+  canvas.addEventListener('pointerup',tpUp); canvas.addEventListener('pointercancel',tpUp);
+
+  function resize(){
+    var w=stage.clientWidth,h=stage.clientHeight; renderer.setSize(w,h,false);
+    camera.aspect=w/h; camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize',resize); resize();
+
+
+  // ---- paper shredder: threads, gravity, pile on the canvas floor ----
+  var shred=null, tanHalf=Math.tan(camera.fov*Math.PI/360);
+  var shredBtn=document.getElementById('shred');
+  var stripMat=new THREE.ShaderMaterial({uniforms:uniforms,side:THREE.DoubleSide,fragmentShader:frag,vertexShader:[
+    'varying vec2 vUv; varying vec3 vWPos; varying vec3 vN;',
+    'void main(){ vUv=uv; vN=normalize(mat3(modelMatrix)*normal); vWPos=(modelMatrix*vec4(position,1.0)).xyz;',
+    '  gl_Position=projectionMatrix*viewMatrix*vec4(vWPos,1.0); }'].join('\n')});
+  var T1=1.1, NN=14;
+  function startShred(){
+    group.updateMatrixWorld(true);
+    var N=Math.max(24,Math.min(60,Math.round(W*14))), L=H/(NN-1), sw=W/N;
+    var bW=new THREE.Vector3(1,0,0).transformDirection(poster.matrixWorld);
+    poster.visible=false; flameMesh.visible=false; shadow.visible=false;
+    var strips=[];
+    for(var i=0;i<N;i++){
+      var g=new THREE.BufferGeometry(), uvA=new Float32Array(NN*4), idx=[];
+      for(var k=0;k<NN;k++){ var v=1-k/(NN-1); uvA[k*4]=i/N; uvA[k*4+1]=v; uvA[k*4+2]=(i+1)/N; uvA[k*4+3]=v; }
+      for(var k2=0;k2<NN-1;k2++){ var a=2*k2; idx.push(a,a+2,a+1,a+1,a+2,a+3); }
+      g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(NN*6),3));
+      g.setAttribute('normal',new THREE.BufferAttribute(new Float32Array(NN*6),3));
+      g.setAttribute('uv',new THREE.BufferAttribute(uvA,2)); g.setIndex(idx);
+      var m=new THREE.Mesh(g,stripMat); m.frustumCulled=false; scene.add(m);
+      var p=[],q=[]; for(var k3=0;k3<NN;k3++){p.push(new THREE.Vector3());q.push(new THREE.Vector3());}
+      strips.push({m:m,g:g,i:i,cx:-W/2+sw*(i+0.5),p:p,q:q,delay:Math.random()*0.7,rel:false,theta:0,omega:0,r:0.008+Math.random()*0.09,z0:(Math.random()-0.5)*0.9});
+    }
+    shred={t:0,strips:strips,L:L,sw:sw,bW:bW};
+    shredBtn.textContent='Restore poster';
+  }
+  function restoreShred(){
+    if(!shred) return;
+    shred.strips.forEach(function(st){scene.remove(st.m);st.g.dispose();});
+    shred=null; poster.visible=true; flameMesh.visible=true; shadow.visible=true;
+    shredBtn.textContent='Shred poster';
+  }
+  shredBtn.onclick=function(){ if(shred) restoreShred(); else startShred(); };
+  var _v=new THREE.Vector3(), _d=new THREE.Vector3();
+  function updateShred(dt){
+    group.updateMatrixWorld(true);
+    var s=shred, t=(s.t+=dt), L=s.L, sw=s.sw;
+    var sy=-H/2+Math.min(1,t/T1)*H*1.08;
+    var tn=uniforms.uTime.value;
+    s.strips.forEach(function(st){
+      var p=st.p,q=st.q,k;
+      if(!st.rel){
+        if(t>T1+st.delay){
+          st.rel=true;
+          var vx=(Math.random()-0.5)*0.5, vz=(Math.random()-0.5)*0.4;
+          for(k=0;k<NN;k++){ var f=k/NN; q[k].set(p[k].x-vx*f*0.016,p[k].y,p[k].z-vz*f*0.016); }
+        } else {
+          for(k=0;k<NN;k++){
+            var ly=H/2-k*L, e=ly<sy?Math.min(1,(sy-ly)/0.9):0; e=e*e*(3-2*e);
+            _v.set(st.cx*(1+0.14*e), ly, Math.sin(tn*4+st.i*0.8)*0.05*e*(k/NN));
+            p[k].copy(poster.localToWorld(_v)); q[k].copy(p[k]);
+          }
+        }
+      }
+      if(st.rel){
+        var steps=Math.min(4,Math.max(1,Math.round(dt*120))), h=1/120;
+        for(var n=0;n<steps;n++){
+          for(k=0;k<NN;k++){
+            var P=p[k],Q=q[k], vx2=(P.x-Q.x)*0.998, vy2=(P.y-Q.y)*0.998, vz2=(P.z-Q.z)*0.998;
+            Q.copy(P); P.x+=vx2; P.y+=vy2-16*h*h; P.z+=vz2+0.00035*Math.sin(tn*3+st.i*0.9)*(k/NN);
+          }
+          for(var it=0;it<6;it++){
+            for(k=0;k<NN-1;k++){ _d.subVectors(p[k+1],p[k]); var len=_d.length()||1e-6, df=(len-L)/len*0.5; _d.multiplyScalar(df); p[k].add(_d); p[k+1].sub(_d); }
+            for(k=0;k<NN-2;k++){ _d.subVectors(p[k+2],p[k]); var l2=_d.length()||1e-6, mn=1.75*L; if(l2<mn){ _d.multiplyScalar((l2-mn)/l2*0.075); p[k].add(_d); p[k+2].sub(_d); } }
+            for(k=0;k<NN;k++){
+              var PP=p[k], gy=-(camera.position.z-PP.z)*tanHalf+st.r;
+              if(PP.y<gy){ PP.y=gy; q[k].y=gy; q[k].x+=(PP.x-q[k].x)*0.35; q[k].z+=(PP.z-q[k].z)*0.35; PP.z+=(st.z0-PP.z)*0.02; }
+              if(PP.z>1.2)PP.z=1.2; if(PP.z<-1.2)PP.z=-1.2;
+            }
+          }
+        }
+        st.theta+=st.omega*dt; st.omega*=Math.pow(0.4,dt);
+      }
+      var pos=st.g.attributes.position.array, c=Math.cos(st.theta), sn=Math.sin(st.theta);
+      var bx=s.bW.x*c+s.bW.z*sn, bz=-s.bW.x*sn+s.bW.z*c, by=s.bW.y;
+      for(k=0;k<NN;k++){
+        var a0=p[Math.max(0,k-1)], a1=p[Math.min(NN-1,k+1)];
+        var tx=a1.x-a0.x, ty=a1.y-a0.y, tz=a1.z-a0.z, tl=Math.hypot(tx,ty,tz)||1; tx/=tl; ty/=tl; tz/=tl;
+        var dd=bx*tx+by*ty+bz*tz, sx=bx-tx*dd, sy2=by-ty*dd, sz=bz-tz*dd, sl=Math.hypot(sx,sy2,sz);
+        if(sl<0.2){ sx=ty*0-tz*0+tz; sy2=0; sz=-tx; sl=Math.hypot(sx,sz)||1; }
+        sx=sx/sl*sw/2; sy2=sy2/sl*sw/2; sz=sz/sl*sw/2;
+        pos[k*6]=p[k].x-sx; pos[k*6+1]=p[k].y-sy2; pos[k*6+2]=p[k].z-sz;
+        pos[k*6+3]=p[k].x+sx; pos[k*6+4]=p[k].y+sy2; pos[k*6+5]=p[k].z+sz;
+      }
+      st.g.attributes.position.needsUpdate=true; st.g.computeVertexNormals();
+    });
+  }
+
+  var clock=new THREE.Clock();
+  function tick(){
+    var dt=Math.min(clock.getDelta(),1/30);
+    uniforms.uTime.value+=dt;
+    // spring: paper follows the drag and wobbles back on release
+    var k=mode==='bend'?200:110, c=mode==='bend'?20:9;
+    vel.x+=(-(pull.x-target.x)*k-vel.x*c)*dt; vel.y+=(-(pull.y-target.y)*k-vel.y*c)*dt; vel.z+=(-(pull.z-target.z)*k-vel.z*c)*dt;
+    pull.addScaledVector(vel,dt); uniforms.uPull.value.copy(pull);
+    rot.x+=(rotT.x-rot.x)*0.12; rot.y+=(rotT.y-rot.y)*0.12;
+    var t=uniforms.uTime.value, wd=uniforms.uWind.value, gs=0.65+0.35*Math.sin(t*0.7)*Math.sin(t*0.31+1);
+    group.rotation.set(rot.x+Math.sin(t*1.3)*0.025*wd*gs, rot.y+Math.sin(t*0.9)*0.06*wd*gs, Math.sin(t*1.1)*0.04*wd*gs);
+    group.position.x=wd*gs*0.12*(1+Math.sin(t*0.6));
+    camZ=Math.exp(Math.log(camZ)+(Math.log(camZT)-Math.log(camZ))*0.2); camera.position.z=camZ; syncZoom();
+    var lx=uniforms.uLightPos.value.x, ly=uniforms.uLightPos.value.y;
+    shadow.position.x=-lx*0.18; shadow.position.y=-ly*0.18;
+    shadow.material.opacity=0.55*Math.min(1,uniforms.uLight.value)*Math.max(0,Math.cos(rot.y))*Math.max(0,Math.cos(rot.x));
+    dirL.position.copy(uniforms.uLightPos.value); dirL.intensity=uniforms.uLight.value; ambL.intensity=uniforms.uAmb.value*2;
+    if(gravityOn) stepGravity(dt);
+    if(spinning) models.forEach(function(m){m.children[0].rotation.y+=dt;});
+    if(shred) updateShred(dt);
+    renderer.render(scene,camera);
+    requestAnimationFrame(tick);
+  }
+  tick();
+})();
+</script>
+</body>
+</html>
