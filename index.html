@@ -81,11 +81,14 @@ body.over #drop{display:flex}
     <div class="row"><label>Paper softness <b id="vSoft">1.0</b></label><input id="soft" type="range" min="0.4" max="2.4" step="0.01" value="1.1"></div>
     <div class="sep"></div>
     <div class="row"><label>Selected model size <b id="vMS">100%</b></label><input id="msize" type="range" min="0.2" max="3" step="0.01" value="1"></div>
+    <div class="row"><label>Selected model depth <b id="vMZ">0.0</b></label><input id="mzs" type="range" min="-4" max="4" step="0.01" value="1" disabled></div>
     <div class="btns"><button id="openModel">Add 3D model (.glb)</button><button id="spin">Stop spinning</button></div>
     <div class="btns"><button id="rmModel">Remove selected</button><button id="drop3d">Drop models</button></div>
     <div id="mlist" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
-    <div id="mstat" class="stat2" style="font-size:12px;color:var(--muted);line-height:1.4;margin:8px 0 12px">Drop one or more .glb files anywhere or use the button. Drag the model to move it on X and Y.</div>
+    <div id="mstat" class="stat2" style="font-size:12px;color:var(--muted);line-height:1.4;margin:8px 0 12px">Drop one or more .glb files anywhere or use the button. Drag the model to move it on X and Y. Hold Shift while dragging, or scroll, to move it in depth (Z).</div>
     <div class="btns"><button id="open">Choose image</button><button id="reset">Reset view</button></div>
+    <div class="btns"><button id="fold">Fold in half</button><button id="unfold" disabled>Unfold</button></div>
+    <div class="btns"><button id="flatten">Flatten paper</button></div>
     <div class="btns"><button id="shred">Shred poster</button><button id="hand">Hand control</button></div>
     <div id="stat">Use your webcam: pinch thumb and index finger to grab and drag. Zoom: pinch with both hands and spread, or hold up two fingers and move your hand toward or away from the camera.</div>
   </div>
@@ -129,6 +132,10 @@ body.over #drop{display:flex}
   '  gl_Position=projectionMatrix*viewMatrix*vec4(vWPos,1.); }'
   ].join('\n');
 
+  var vertSim=['varying vec2 vUv; varying vec3 vWPos; varying vec3 vN;',
+    'void main(){ vUv=uv; vN=normalize(mat3(modelMatrix)*normal); vWPos=(modelMatrix*vec4(position,1.0)).xyz;',
+    '  gl_Position=projectionMatrix*viewMatrix*vec4(vWPos,1.0); }'].join('\n');
+  var vertFlame=['attribute vec2 plane; varying vec2 vLP;','void main(){ vLP=plane; gl_Position=projectionMatrix*viewMatrix*modelMatrix*vec4(position,1.0); }'].join('\n');
   var frag=[
   'uniform sampler2D uMap; uniform vec3 uLightPos; uniform float uLight,uAmb,uGloss,uPix,uHalf,uHSize,uFire,uFlame,uTime; uniform vec2 uSize;',
   'varying vec2 vUv; varying vec3 vWPos; varying vec3 vN;',
@@ -187,7 +194,7 @@ body.over #drop{display:flex}
     uRadius:{value:1.1}, uTime:{value:0}, uLightPos:{value:new THREE.Vector3(1.5,1.5,4)},
     uLight:{value:1.1}, uAmb:{value:0.3}, uGloss:{value:0.35}, uPix:{value:0}, uHalf:{value:0}, uFire:{value:0}, uFlame:{value:0.25}, uHSize:{value:0.4}, uWind:{value:0.5}, uSize:{value:new THREE.Vector2(3,4)}
   };
-  var mat=new THREE.ShaderMaterial({uniforms:uniforms,vertexShader:vert,fragmentShader:frag,side:THREE.DoubleSide});
+  var mat=new THREE.ShaderMaterial({uniforms:uniforms,vertexShader:vertSim,fragmentShader:frag,side:THREE.DoubleSide});
   var poster=new THREE.Mesh(new THREE.PlaneGeometry(1,1),mat); group.add(poster);
   var fragF=[
   'uniform float uFire,uFlame,uTime; uniform vec2 uSize; varying vec2 vLP;',
@@ -213,8 +220,8 @@ body.over #drop{display:flex}
   '  flc=mix(flc,vec3(1.0,0.95,0.7),smoothstep(0.6,1.0,k));',
   '  gl_FragColor=vec4(flc*a+vec3(1.0,0.4,0.05)*glow,1.0); }'
   ].join('\n');
-  var flameMat=new THREE.ShaderMaterial({uniforms:uniforms,vertexShader:vert,fragmentShader:fragF,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide});
-  var flameMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,1),flameMat); flameMesh.position.z=0.05; flameMesh.renderOrder=2; flameMesh.raycast=function(){}; group.add(flameMesh);
+  var flameMat=new THREE.ShaderMaterial({uniforms:uniforms,vertexShader:vertFlame,fragmentShader:fragF,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide});
+  var flameMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,1),flameMat); flameMesh.position.z=0; flameMesh.frustumCulled=false; flameMesh.renderOrder=2; flameMesh.raycast=function(){}; group.add(flameMesh);
 
   var W=3,H=4;
 
@@ -226,6 +233,294 @@ body.over #drop{display:flex}
   var shadow=new THREE.Mesh(new THREE.PlaneGeometry(1,1),new THREE.MeshBasicMaterial({map:shTex,transparent:true,opacity:.5,depthWrite:false}));
   shadow.position.z=-1.3; scene.add(shadow);
 
+  // ---- paper simulation: position based dynamics, after kaik's paper.js ----
+  // stretch + shear links keep it from stretching, multi-span bending keeps wide springy curves,
+  // deep bends are remembered as creases, layers push apart so folds can't pass through themselves.
+  var KEEP=0.12, sheet=null;
+  function Sheet(W,H){
+    var nx=Math.max(10,Math.round(W*9)), ny=Math.max(12,Math.round(H*9)), X=nx+1, n=X*(ny+1), sx=W/nx, sy=H/ny, s=Math.min(sx,sy), i,j,k, S=this;
+    S.W=W;S.H=H;S.nx=nx;S.ny=ny;S.n=n;S.s=s;S.R=0.27*s;S.sx=sx;S.sy=sy;
+    S.u=new Float32Array(n);S.v=new Float32Array(n);S.col=new Int16Array(n);S.row=new Int16Array(n);
+    S.p=new Float32Array(n*3);S.q=new Float32Array(n*3);S.nq=new Float32Array(n*3);S.w=new Float32Array(n).fill(1);
+    for(j=0,i=0;j<=ny;j++)for(k=0;k<=nx;k++,i++){S.u[i]=k*sx;S.v[i]=j*sy;S.col[i]=k;S.row[i]=j;}
+    S.flat();
+    var id=function(a,b){return b*X+a;}, L=[];
+    for(j=0;j<=ny;j++)for(k=0;k<=nx;k++){
+      if(k<nx)L.push(id(k,j),id(k+1,j));
+      if(j<ny)L.push(id(k,j),id(k,j+1));
+      if(k<nx&&j<ny)L.push(id(k,j),id(k+1,j+1),id(k+1,j),id(k,j+1));
+    }
+    S.L=new Int32Array(L); S.Lr=new Float32Array(L.length/2);
+    for(i=0;i<S.Lr.length;i++){var a=L[2*i],b=L[2*i+1]; S.Lr[i]=Math.hypot(S.u[a]-S.u[b],S.v[a]-S.v[b]);}
+    var T=[],Tk=[],Ts=[];
+    var add=function(ka,ja,kb,jb,k2,j2,kk){var a=id(ka,ja),b=id(kb,jb),c=id(k2,j2);T.push(a,c,b);Tk.push(kk);Ts.push(Math.hypot(S.u[a]-S.u[c],S.v[a]-S.v[c]));};
+    var spans=[[1,1],[2,0.55],[4,0.3]];
+    for(j=0;j<=ny;j++)for(k=0;k<=nx;k++){
+      for(var si=0;si<3;si++){var h=spans[si][0],kk=spans[si][1];
+        if(k-h>=0&&k+h<=nx)add(k-h,j,k+h,j,k,j,kk);
+        if(j-h>=0&&j+h<=ny)add(k,j-h,k,j+h,k,j,kk);
+      }
+      if(k>=1&&j>=1&&k+1<=nx&&j+1<=ny){add(k-1,j-1,k+1,j+1,k,j,0.6);add(k+1,j-1,k-1,j+1,k,j,0.6);}
+    }
+    S.T=new Int32Array(T);S.Tk=new Float32Array(Tk);S.Ts=new Float32Array(Ts);
+    S.Tr=new Float32Array(Tk.length);S.Tp=new Float32Array(Tk.length);
+    var hs=1; while(hs<n*2) hs<<=1;
+    S.hmask=hs-1;S.hstart=new Int32Array(hs+1);S.hfill=new Int32Array(hs);S.hent=new Int32Array(n);S.hkey=new Int32Array(n);
+    S.grab=null;S.hold=null;S.tgt=null;S.tgtK=0.25;
+  }
+  Sheet.prototype.flat=function(){
+    var S=this,i; for(i=0;i<S.n;i++){S.p[3*i]=S.u[i]-S.W/2;S.p[3*i+1]=S.H/2-S.v[i];S.p[3*i+2]=0;}
+    S.q.set(S.p);
+  };
+  Sheet.prototype.smooth=function(){this.Tr.fill(0);this.Tp.fill(0);this.tgt=null;folds=[];foldAnim=null;this.flat();foldBtns();};
+  Sheet.prototype.near=function(u,v,r){
+    var S=this,out=[],i,bd=1e9,best=0;
+    for(i=0;i<S.n;i++){var d=Math.hypot(S.u[i]-u,S.v[i]-v); if(d<=r)out.push(i); if(d<bd){bd=d;best=i;}}
+    if(!out.length)out.push(best); return out;
+  };
+  Sheet.prototype.refreshW=function(){
+    var S=this,i; S.w.fill(1); if(S.grab) for(i=0;i<S.grab.idx.length;i++) S.w[S.grab.idx[i]]=0;
+  };
+  Sheet.prototype.doGrab=function(idx,at){
+    var S=this,off=new Float32Array(idx.length*3),c=idx[0],cd=1e9,i,a;
+    for(i=0;i<idx.length;i++){
+      for(a=0;a<3;a++)off[3*i+a]=S.p[3*idx[i]+a]-at[a];
+      var d=Math.hypot(off[3*i],off[3*i+1],off[3*i+2]); if(d<cd){cd=d;c=idx[i];}
+    }
+    S.grab={idx:idx,off:off,at:at.slice(),cur:at.slice(),c:c};
+    S.refreshW();
+    // the far part of the sheet is held softly, like a second hand, so a pull bends it in one arc
+    var uc=S.u[c],vc=S.v[c],far=1,hw=new Float32Array(S.n);
+    for(i=0;i<S.n;i++)far=Math.max(far,Math.hypot(S.u[i]-uc,S.v[i]-vc));
+    for(i=0;i<S.n;i++){var t=Math.min(1,Math.max(0,(Math.hypot(S.u[i]-uc,S.v[i]-vc)/far-0.45)/0.45)); hw[i]=t*t*(3-2*t);}
+    S.hold={w:hw,at:S.p.slice()};
+  };
+  Sheet.prototype.moveGrab=function(at){if(this.grab)this.grab.at=at.slice();};
+  Sheet.prototype.release=function(){
+    var S=this,g=S.grab; if(!g)return;
+    for(var i=0;i<g.idx.length;i++)for(var a=0;a<3;a++)S.q[3*g.idx[i]+a]=S.p[3*g.idx[i]+a];
+    S.grab=null;S.hold=null;S.refreshW();
+  };
+  Sheet.prototype.normals=function(q){
+    var S=this,nq=S.nq,nx=S.nx,ny=S.ny,X=nx+1,j,k;
+    for(j=0;j<=ny;j++){var j0=Math.max(0,j-1),j1=Math.min(ny,j+1);
+      for(k=0;k<=nx;k++){var k0=Math.max(0,k-1),k1=Math.min(nx,k+1);
+        var r=3*(j*X+k1),l=3*(j*X+k0),dn=3*(j1*X+k),up=3*(j0*X+k);
+        var ax=q[r]-q[l],ay=q[r+1]-q[l+1],az=q[r+2]-q[l+2],bx=q[dn]-q[up],by=q[dn+1]-q[up+1],bz=q[dn+2]-q[up+2];
+        var x=ay*bz-az*by,y=az*bx-ax*bz,z=ax*by-ay*bx,len=Math.hypot(x,y,z)||1,o=3*(j*X+k);
+        nq[o]=x/len;nq[o+1]=y/len;nq[o+2]=z/len;
+      }}
+  };
+  Sheet.prototype.links=function(){
+    var S=this,p=S.p,w=S.w,L=S.L,rest=S.Lr;
+    for(var c=0,m=rest.length;c<m;c++){
+      var a=L[2*c],b=L[2*c+1],wa=w[a],wb=w[b],ws=wa+wb; if(!ws)continue;
+      var ia=3*a,ib=3*b,dx=p[ib]-p[ia],dy=p[ib+1]-p[ia+1],dz=p[ib+2]-p[ia+2],d=Math.sqrt(dx*dx+dy*dy+dz*dz); if(d<1e-7)continue;
+      var f=(d-rest[c])/(d*ws);
+      p[ia]+=dx*f*wa;p[ia+1]+=dy*f*wa;p[ia+2]+=dz*f*wa;p[ib]-=dx*f*wb;p[ib+1]-=dy*f*wb;p[ib+2]-=dz*f*wb;
+    }
+  };
+  Sheet.prototype.bend=function(kb){
+    var S=this,p=S.p,w=S.w,T=S.T,Tk=S.Tk,Tr=S.Tr,nq=S.nq;
+    for(var c=0,m=Tk.length;c<m;c++){
+      var a=T[3*c],i=T[3*c+1],b=T[3*c+2],Sw=w[i]+0.25*(w[a]+w[b]); if(!Sw)continue;
+      var ia=3*a,ii=3*i,ib=3*b,r=Tr[c];
+      var ex=p[ii]-0.5*(p[ia]+p[ib])-r*nq[ii],ey=p[ii+1]-0.5*(p[ia+1]+p[ib+1])-r*nq[ii+1],ez=p[ii+2]-0.5*(p[ia+2]+p[ib+2])-r*nq[ii+2];
+      var g=kb*Tk[c]/Sw,cx=ex*g,cy=ey*g,cz=ez*g;
+      p[ii]-=cx*w[i];p[ii+1]-=cy*w[i];p[ii+2]-=cz*w[i];
+      p[ia]+=0.5*cx*w[a];p[ia+1]+=0.5*cy*w[a];p[ia+2]+=0.5*cz*w[a];
+      p[ib]+=0.5*cx*w[b];p[ib+1]+=0.5*cy*w[b];p[ib+2]+=0.5*cz*w[b];
+    }
+  };
+  // a bend past the yield point is remembered: the paper keeps part of its deepest fold
+  Sheet.prototype.plastic=function(){
+    var S=this,p=S.p,T=S.T,nq=S.nq,Tp=S.Tp,Tr=S.Tr,Ts=S.Ts;
+    for(var c=0,m=S.Tk.length;c<m;c++){
+      var a=3*T[3*c],i=3*T[3*c+1],b=3*T[3*c+2];
+      var off=(p[i]-0.5*(p[a]+p[b]))*nq[i]+(p[i+1]-0.5*(p[a+1]+p[b+1]))*nq[i+1]+(p[i+2]-0.5*(p[a+2]+p[b+2]))*nq[i+2];
+      if(Math.abs(off)>0.5*Ts[c]&&Math.abs(off)>Math.abs(Tp[c])){Tp[c]=off;Tr[c]=KEEP*off;}
+    }
+  };
+  Sheet.prototype.tether=function(){
+    var S=this,g=S.grab; if(!g)return;
+    var p=S.p,w=S.w,u=S.u,v=S.v,c=g.c,ax=p[3*c],ay=p[3*c+1],az=p[3*c+2];
+    for(var i=0;i<S.n;i++){
+      if(!w[i])continue;
+      var k=3*i,dx=p[k]-ax,dy=p[k+1]-ay,dz=p[k+2]-az,d2=dx*dx+dy*dy+dz*dz,du=u[i]-u[c],dv=v[i]-v[c],lim2=du*du+dv*dv;
+      if(d2<=lim2)continue;
+      var d=Math.sqrt(d2),f=(d-Math.sqrt(lim2))/d; p[k]-=dx*f;p[k+1]-=dy*f;p[k+2]-=dz*f;
+    }
+  };
+  // layers stay 2R apart along the sheet normal, on the side they were on when the step began
+  Sheet.prototype.collide=function(){
+    if(this.tgt) return; // a folded pose already keeps its layers apart; colliding them as well makes the fold jitter
+    var S=this,p=S.p,q=S.q,nq=S.nq,w=S.w,n=S.n,col=S.col,row=S.row,gap=2*S.R,reach=S.s*1.05,inv=1/reach,mask=S.hmask;
+    var lat2=Math.pow(S.s*0.8,2),reach2=reach*reach,st=S.hstart,ent=S.hent,key=S.hkey,i,h,e;
+    var hs=function(x,y,z){return((Math.imul(x,92837111)^Math.imul(y,689287499)^Math.imul(z,283923481))>>>0)&mask;};
+    st.fill(0);
+    for(i=0;i<n;i++){h=hs(Math.floor(p[3*i]*inv),Math.floor(p[3*i+1]*inv),Math.floor(p[3*i+2]*inv));key[i]=h;st[h+1]++;}
+    for(h=0;h<mask+1;h++)st[h+1]+=st[h];
+    var fa=S.hfill; fa.set(st.subarray(0,mask+1));
+    for(i=0;i<n;i++)ent[fa[key[i]]++]=i;
+    for(i=0;i<n;i++){
+      var ia=3*i,cx=Math.floor(p[ia]*inv),cy=Math.floor(p[ia+1]*inv),cz=Math.floor(p[ia+2]*inv);
+      for(var dx=-1;dx<=1;dx++)for(var dy=-1;dy<=1;dy++)for(var dz=-1;dz<=1;dz++){
+        h=hs(cx+dx,cy+dy,cz+dz);
+        for(e=st[h];e<st[h+1];e++){
+          var j=ent[e];
+          if(j<=i||(Math.abs(col[i]-col[j])<=2&&Math.abs(row[i]-row[j])<=2))continue;
+          var ib=3*j,ex=p[ia]-p[ib],ey=p[ia+1]-p[ib+1],ez=p[ia+2]-p[ib+2],d2=ex*ex+ey*ey+ez*ez;
+          if(d2>=reach2)continue;
+          var ws=w[i]+w[j]; if(!ws)continue;
+          var ai=Math.abs(ex*nq[ia]+ey*nq[ia+1]+ez*nq[ia+2]),aj=Math.abs(ex*nq[ib]+ey*nq[ib+1]+ez*nq[ib+2]),o=aj>=ai?ib:ia;
+          var n0=nq[o],n1=nq[o+1],n2=nq[o+2],dn=ex*n0+ey*n1+ez*n2;
+          if(d2-dn*dn>lat2)continue;
+          var dn0=(q[ia]-q[ib])*n0+(q[ia+1]-q[ib+1])*n1+(q[ia+2]-q[ib+2])*n2;
+          var side=Math.abs(dn0)>0.15*gap?Math.sign(dn0):(Math.sign(dn)||1), need=gap-side*dn; if(need<=0)continue;
+          var f=need*side/ws;
+          p[ia]+=n0*f*w[i];p[ia+1]+=n1*f*w[i];p[ia+2]+=n2*f*w[i];
+          p[ib]-=n0*f*w[j];p[ib+1]-=n1*f*w[j];p[ib+2]-=n2*f*w[j];
+        }
+      }
+    }
+  };
+  Sheet.prototype.step=function(dt,wind,t){
+    var S=this,p=S.p,q=S.q,w=S.w,n=S.n,sub=2,h=dt/sub,damp=0.965,iters=6,i,k,it,sb,g=S.grab;
+    var vmax=1.6*S.R,vmax2=vmax*vmax,nq=S.nq;
+    for(sb=0;sb<sub;sb++){
+      for(i=0;i<n;i++){k=3*i;
+        if(!w[i]){q[k]=p[k];q[k+1]=p[k+1];q[k+2]=p[k+2];continue;}
+        var vx=(p[k]-q[k])*damp,vy=(p[k+1]-q[k+1])*damp,vz=(p[k+2]-q[k+2])*damp;
+        q[k]=p[k];q[k+1]=p[k+1];q[k+2]=p[k+2];p[k]+=vx;p[k+1]+=vy;p[k+2]+=vz;
+      }
+      S.normals(q);
+      if(wind>0){
+        var tt=t+sb*h;
+        for(i=0;i<n;i++){ if(!w[i])continue; k=3*i;
+          var x=p[k],y=p[k+1],ph=x*1.6+y*0.7-tt*(1.5+2.5*wind);
+          var f=wind*(0.6*Math.sin(ph)+0.3*Math.sin(x*3.1-y*1.7-tt*4.3)+0.3)*9*h*h;
+          p[k]+=nq[k]*f;p[k+1]+=nq[k+1]*f;p[k+2]+=nq[k+2]*f;
+        }
+      }
+      for(i=0;i<n;i++){k=3*i;var dx2=p[k]-q[k],dy2=p[k+1]-q[k+1],dz2=p[k+2]-q[k+2],d2=dx2*dx2+dy2*dy2+dz2*dz2;
+        if(d2<=vmax2)continue; var fc=vmax/Math.sqrt(d2); p[k]=q[k]+dx2*fc;p[k+1]=q[k+1]+dy2*fc;p[k+2]=q[k+2]+dz2*fc;}
+      if(S.hold){var hw=S.hold.w,at=S.hold.at;
+        for(i=0;i<n;i++){var kk=hw[i]*0.06; if(!kk||!w[i])continue; for(var a=0;a<3;a++)p[3*i+a]+=(at[3*i+a]-p[3*i+a])*kk;}}
+      if(g){ // the held spot follows the pointer at a paper-friendly pace
+        var gx=g.at[0]-g.cur[0],gy=g.at[1]-g.cur[1],gz=g.at[2]-g.cur[2],gd=Math.hypot(gx,gy,gz),lim=0.3*S.s,gf=gd>lim?lim/gd:1;
+        g.cur[0]+=gx*gf;g.cur[1]+=gy*gf;g.cur[2]+=gz*gf;
+        for(i=0;i<g.idx.length;i++)for(var b=0;b<3;b++)p[3*g.idx[i]+b]=g.cur[b]+g.off[3*i+b];
+      }
+      S.tether();
+      if(S.tgt){ // pulled to the folded pose, never faster than collisions can follow
+        var tg=S.tgt,kt=S.tgtK;
+        for(i=0;i<n;i++){ if(!w[i])continue; var o=3*i,fx=(tg[o]-p[o])*kt,fy=(tg[o+1]-p[o+1])*kt,fz=(tg[o+2]-p[o+2])*kt,fd=fx*fx+fy*fy+fz*fz,ff=fd>vmax2?vmax/Math.sqrt(fd):1;
+          p[o]+=fx*ff;p[o+1]+=fy*ff;p[o+2]+=fz*ff; }
+      }
+      for(it=0;it<iters;it++){
+        if(it===(iters>>1))S.collide();
+        S.links();S.bend(0.25);S.links();S.links();
+      }
+      S.tether();S.collide();
+      // keep the sheet centred where it started (nothing else holds it)
+      var cx=0,cy=0,cz=0; for(i=0;i<n;i++){cx+=p[3*i];cy+=p[3*i+1];cz+=p[3*i+2];} cx/=n;cy/=n;cz/=n;
+      if(!g&&!S.tgt)for(i=0;i<n;i++){ p[3*i]-=cx*0.05;p[3*i+1]-=cy*0.05;p[3*i+2]-=cz*0.05; }
+      if(!g&&!S.tgt){ // and turned to face the camera again: a small rotation toward the sheet's own right/up/normal axes
+        var ax0=0,ax1=0,ax2=0,ay0=0,ay1=0,ay2=0,hw2=S.W/2,hh2=S.H/2;
+        for(i=0;i<n;i++){var du=S.u[i]-hw2,dv=hh2-S.v[i],d0=p[3*i]-cx,d1=p[3*i+1]-cy,d2b=p[3*i+2]-cz;ax0+=d0*du;ax1+=d1*du;ax2+=d2b*du;ay0+=d0*dv;ay1+=d1*dv;ay2+=d2b*dv;}
+        var lx=Math.hypot(ax0,ax1,ax2),ly=Math.hypot(ay0,ay1,ay2);
+        if(lx>1e-6&&ly>1e-6){
+          ax0/=lx;ax1/=lx;ax2/=lx;ay0/=ly;ay1/=ly;ay2/=ly;
+          var nz0=ax1*ay2-ax2*ay1,nz1=ax2*ay0-ax0*ay2,nz2=ax0*ay1-ax1*ay0;
+          var kr=0.05,o0=kr*(-ay2+nz1),o1=kr*(ax2-nz0),o2=kr*(-ax1+ay0);
+          for(i=0;i<n;i++){var e0=p[3*i]-cx,e1=p[3*i+1]-cy,e2=p[3*i+2]-cz;
+            p[3*i]+=o1*e2-o2*e1;p[3*i+1]+=o2*e0-o0*e2;p[3*i+2]+=o0*e1-o1*e0;}
+        }
+      }
+    }
+    S.plastic();
+  };
+  // a point of the flat poster (x,y local) → its place on the simulated sheet, lifted off it by off
+  var _o=[0,0,0];
+  function simPt(x,y,o,off){
+    var S=sheet,W2=S.W/2,H2=S.H/2,cx=Math.max(-W2,Math.min(W2,x)),cy=Math.max(-H2,Math.min(H2,y));
+    var fu=(cx+W2)/S.W*S.nx,fv=(H2-cy)/S.H*S.ny,k=Math.min(S.nx-1,Math.floor(fu)),j=Math.min(S.ny-1,Math.floor(fv)),a=fu-k,b=fv-j,X=S.nx+1,p=S.p;
+    var i00=3*(j*X+k),i10=3*(j*X+k+1),i01=3*((j+1)*X+k),i11=3*((j+1)*X+k+1),P=[0,0,0],r=[0,0,0],u=[0,0,0],c;
+    for(c=0;c<3;c++){
+      P[c]=(p[i00+c]*(1-a)+p[i10+c]*a)*(1-b)+(p[i01+c]*(1-a)+p[i11+c]*a)*b;
+      r[c]=p[i10+c]-p[i00+c]; u[c]=p[i00+c]-p[i01+c];
+    }
+    var rl=Math.hypot(r[0],r[1],r[2])||1,ul=Math.hypot(u[0],u[1],u[2])||1; for(c=0;c<3;c++){r[c]/=rl;u[c]/=ul;}
+    var nx=r[1]*u[2]-r[2]*u[1],ny=r[2]*u[0]-r[0]*u[2],nz=r[0]*u[1]-r[1]*u[0],dx=x-cx,dy=y-cy;
+    o.x=P[0]+r[0]*dx+u[0]*dy+nx*off; o.y=P[1]+r[1]*dx+u[1]*dy+ny*off; o.z=P[2]+r[2]*dx+u[2]*dy+nz*off;
+  }
+  function setFlameGeom(){
+    var g=new THREE.PlaneGeometry(W*1.6,H*2,Math.round(W*12),Math.round(H*24)),ps=g.attributes.position,pl=new Float32Array(ps.count*2);
+    for(var i=0;i<ps.count;i++){pl[2*i]=ps.getX(i);pl[2*i+1]=ps.getY(i);}
+    g.setAttribute('plane',new THREE.BufferAttribute(pl,2)); g.userData.pl=pl;
+    flameMesh.geometry.dispose(); flameMesh.geometry=g;
+  }
+  // ---- folding: the sheet is pulled to a stack of folded targets, each fold turns half the stack 180° about its crease ----
+  var folds=[], foldAnim=null, FOLD_T=1.3;
+  function targetsFor(rec,th){
+    var b=rec.base,t=new Float32Array(b.length),n=sheet.n,c=Math.cos(th),s=Math.sin(th),i,k;
+    for(i=0;i<n;i++){k=3*i;t[k]=b[k];t[k+1]=b[k+1];t[k+2]=b[k+2];
+      if(rec.move[i]){
+        var a=rec.axis?b[k]:b[k+1], d=a-rec.mid, dz=b[k+2]-rec.zc, na=rec.mid+d*c-dz*s;
+        if(rec.axis) t[k]=na; else t[k+1]=na;
+        t[k+2]=rec.zc+d*s+dz*c;
+      }}
+    return t;
+  }
+  function foldBtns(){
+    var f=document.getElementById('fold'),u=document.getElementById('unfold'); if(!f)return;
+    f.textContent=folds.length?'Fold again ('+folds.length+')':'Fold in half'; f.disabled=folds.length>=7;
+    u.disabled=!folds.length;
+  }
+  function startFold(){
+    if(!sheet||shred||foldAnim||folds.length>=7) return;
+    var S=sheet,n=S.n,i,base;
+    if(folds.length) base=folds[folds.length-1].final;
+    else{ base=new Float32Array(n*3); for(i=0;i<n;i++){base[3*i]=S.u[i]-S.W/2;base[3*i+1]=S.H/2-S.v[i];} }
+    var axis=folds.length%2,mn=1e9,mx=-1e9,zmax=-1e9;
+    for(i=0;i<n;i++){var a=axis?base[3*i]:base[3*i+1]; if(a<mn)mn=a; if(a>mx)mx=a; if(base[3*i+2]>zmax)zmax=base[3*i+2];}
+    var mid=(mn+mx)/2,move=new Uint8Array(n);
+    for(i=0;i<n;i++) move[i]=(axis?base[3*i]:base[3*i+1])>mid?1:0;
+    var rec={axis:axis,mid:mid,zc:zmax+1.2*S.R*1.2,move:move,base:base,final:null};
+    rec.final=targetsFor(rec,Math.PI);
+    folds.push(rec); foldAnim={rec:rec,from:0,to:Math.PI,t:0,pop:false}; S.tgtK=0.25; foldBtns();
+  }
+  function startUnfold(){
+    if(!sheet||foldAnim||!folds.length) return;
+    foldAnim={rec:folds[folds.length-1],from:Math.PI,to:0,t:0,pop:true}; sheet.tgtK=0.25;
+  }
+  function updateFold(dt){
+    var A=foldAnim; if(!A) return;
+    A.t+=dt; var u=Math.min(1,A.t/FOLD_T), e=u*u*(3-2*u);
+    sheet.tgt=targetsFor(A.rec,A.from+(A.to-A.from)*e);
+    if(u>=1){
+      if(A.pop){ folds.pop(); sheet.tgt=folds.length?folds[folds.length-1].final:null; }
+      else sheet.tgt=A.rec.final;
+      sheet.tgtK=0.12; foldAnim=null; foldBtns();
+    }
+  }
+
+  var _po={x:0,y:0,z:0};
+  function stepSheet(dt){
+    var S=sheet; if(!S) return;
+    updateFold(dt);
+    S.step(Math.min(dt,1/30),uniforms.uWind.value,uniforms.uTime.value);
+    S.normals(S.p);
+    var g=poster.geometry, pos=g.attributes.position.array, nm=g.attributes.normal.array, i;
+    pos.set(S.p); for(i=0;i<nm.length;i++) nm[i]=-S.nq[i];
+    g.attributes.position.needsUpdate=true; g.attributes.normal.needsUpdate=true; g.computeBoundingSphere();
+    if(uniforms.uFire.value>0.005&&flameMesh.visible){
+      var fg=flameMesh.geometry,pl=fg.userData.pl,fp=fg.attributes.position.array;
+      for(i=0;i<pl.length/2;i++){simPt(pl[2*i],pl[2*i+1],_po,0.04);fp[3*i]=_po.x;fp[3*i+1]=_po.y;fp[3*i+2]=_po.z;}
+      fg.attributes.position.needsUpdate=true; fg.boundingSphere=null;
+    }
+  }
+
   function setImage(img){
     var tex=new THREE.Texture(img); tex.needsUpdate=true; tex.minFilter=THREE.LinearMipmapLinearFilter;
     tex.anisotropy=renderer.capabilities.getMaxAnisotropy();
@@ -234,10 +529,10 @@ body.over #drop{display:flex}
     var ar=img.width/img.height, maxW=3.6, maxH=4.4;
     H=maxH; W=H*ar; if(W>maxW){W=maxW;H=W/ar;}
     poster.geometry.dispose();
-    poster.geometry=new THREE.PlaneGeometry(W,H,Math.max(20,Math.round(W*30)),Math.max(20,Math.round(H*30)));
+    folds=[];foldAnim=null;foldBtns(); sheet=new Sheet(W,H); poster.geometry=new THREE.PlaneGeometry(W,H,sheet.nx,sheet.ny); poster.frustumCulled=false;
     uniforms.uSize.value.set(W,H);
     if(shred) restoreShred();
-    flameMesh.geometry.dispose(); flameMesh.geometry=new THREE.PlaneGeometry(W*1.6,H*2,Math.round(W*24),Math.round(H*2*24));
+    setFlameGeom();
     shadow.scale.set(W*1.15,H*1.15,1);
   }
 
@@ -291,8 +586,8 @@ body.over #drop{display:flex}
   function select(m){
     sel=m; msEl.disabled=!m;
     if(m) msEl.value=m.userData.k;
-    updSize(); renderList();
-    if(m) mstat.textContent='Selected: '+m.userData.name+'. Drag it to move, use the slider to resize.';
+    updSize(); renderList(); syncDepth();
+    if(m) mstat.textContent='Selected: '+m.userData.name+'. Drag to move, Shift+drag or scroll to move in depth, slider to resize.';
   }
   function disposeModel(m){
     if(!m) return;
@@ -341,52 +636,64 @@ body.over #drop{display:flex}
       dropBtn.textContent='Drop models';
     }
   };
+  var mzEl=document.getElementById('mzs'), mzOut=document.getElementById('vMZ');
+  function syncDepth(){
+    if(!sel){ mzEl.disabled=true; mzOut.textContent='0.0'; return; }
+    mzEl.disabled=false; mzEl.value=sel.position.z;
+    mzEl.style.setProperty('--p',(mzEl.value-mzEl.min)/(mzEl.max-mzEl.min)*100+'%'); mzOut.textContent=sel.position.z.toFixed(1);
+  }
+  mzEl.addEventListener('input',function(){ if(sel){ sel.position.z=+mzEl.value; syncDepth(); } });
+  // Collisions use each model's real bounding box in the world (spin, size and the turned poster
+  // included) in all three axes, and the canvas edges are worked out at the depth of the model's front face.
   function stepGravity(dt){
     group.updateMatrixWorld(true);
     var n=models.length; if(!n) return;
-    var P=[],HX=[],HY=[],S=[],i,j,it,st,SUB=3,h=dt/SUB,E=0.25;
+    var P=[],HH=[],OFF=[],S=[],V=[],i,j,it,st,SUB=3,h=dt/SUB,E=0.25,tanW=tanHalf*camera.aspect;
     for(i=0;i<n;i++){
       var m=models[i],u=m.userData;
-      if(u.vx===undefined){u.vx=0;} if(u.vy===undefined){u.vy=0;}
-      var wp=new THREE.Vector3(); m.getWorldPosition(wp); P.push(wp);
-      // tight half-extents from the real bounding box, accounting for the current spin
-      var sc=u.base*u.k, th=m.children[0].rotation.y, c=Math.abs(Math.cos(th)), sn=Math.abs(Math.sin(th));
-      HX.push(0.5*sc*(c*u.dims.x+sn*u.dims.z)); HY.push(0.5*sc*u.dims.y);
+      if(u.vx===undefined)u.vx=0; if(u.vy===undefined)u.vy=0; if(u.vz===undefined)u.vz=0;
+      var pw=new THREE.Vector3(); m.getWorldPosition(pw);
+      _bx.setFromObject(m);
+      var c=_bx.getCenter(new THREE.Vector3()), hf=_bx.getSize(new THREE.Vector3()).multiplyScalar(0.485);
+      OFF.push(pw.sub(c)); P.push(c); HH.push(hf); V.push(8*hf.x*hf.y*hf.z+1e-6);
       S.push(mode==='model'&&sel===m);
-      if(S[i]){u.vx=0;u.vy=0;}
+      if(S[i]){u.vx=0;u.vy=0;u.vz=0;}
     }
     for(st=0;st<SUB;st++){
-      for(i=0;i<n;i++){ if(S[i]) continue; var u1=models[i].userData; u1.vy-=18*h; P[i].x+=u1.vx*h; P[i].y+=u1.vy*h; }
+      for(i=0;i<n;i++){ if(S[i]) continue; var u1=models[i].userData; u1.vy-=18*h; P[i].x+=u1.vx*h; P[i].y+=u1.vy*h; P[i].z+=u1.vz*h; }
       for(it=0;it<4;it++){
         for(i=0;i<n;i++){
           if(S[i]) continue;
-          var u2=models[i].userData, depth=camera.position.z-P[i].z;
-          var fy=-depth*tanHalf+HY[i], hw=depth*tanHalf*camera.aspect-HX[i];
-          if(P[i].y<fy){ P[i].y=fy; if(u2.vy<0) u2.vy=u2.vy<-1.2?-u2.vy*0.3:0; u2.vx*=0.94; }
+          var u2=models[i].userData, depth=Math.max(0.3,camera.position.z-(P[i].z+HH[i].z));
+          var fy=-depth*tanHalf+HH[i].y, hw=depth*tanW-HH[i].x;
+          if(P[i].y<fy){ P[i].y=fy; if(u2.vy<0) u2.vy=u2.vy<-1.2?-u2.vy*0.3:0; u2.vx*=0.94; u2.vz*=0.94; }
           if(P[i].x<-hw){ P[i].x=-hw; if(u2.vx<0) u2.vx=-u2.vx*0.3; }
           if(P[i].x>hw){ P[i].x=hw; if(u2.vx>0) u2.vx=-u2.vx*0.3; }
+          if(P[i].z>5){P[i].z=5; if(u2.vz>0)u2.vz=0;} if(P[i].z<-5){P[i].z=-5; if(u2.vz<0)u2.vz=0;}
         }
         for(i=0;i<n;i++) for(j=i+1;j<n;j++){
-          var dx=P[j].x-P[i].x, dy=P[j].y-P[i].y;
-          var ox=HX[i]+HX[j]-Math.abs(dx), oy=HY[i]+HY[j]-Math.abs(dy);
-          if(ox<=0||oy<=0) continue;
-          var ia=S[i]?0:1/(HX[i]*HY[i]+1e-6), ib=S[j]?0:1/(HX[j]*HY[j]+1e-6), is=ia+ib; if(is===0) continue;
-          var nx=0,ny=0,pen;
-          if(oy<=ox){ ny=dy>=0?1:-1; pen=oy; if(Math.abs(dy)<1e-4) ny=(i<j?1:-1); }
+          var dx=P[j].x-P[i].x, dy=P[j].y-P[i].y, dz=P[j].z-P[i].z;
+          var ox=HH[i].x+HH[j].x-Math.abs(dx), oy=HH[i].y+HH[j].y-Math.abs(dy), oz=HH[i].z+HH[j].z-Math.abs(dz);
+          if(ox<=0||oy<=0||oz<=0) continue;
+          var ia=S[i]?0:1/V[i], ib=S[j]?0:1/V[j], is=ia+ib; if(is===0) continue;
+          var nx=0,ny=0,nz=0,pen;
+          if(oy<=ox&&oy<=oz){ ny=dy>=0?1:-1; pen=oy; if(Math.abs(dy)<1e-4) ny=(i<j?1:-1); }
+          else if(oz<=ox){ nz=dz>=0?1:-1; pen=oz; }
           else { nx=dx>=0?1:-1; pen=ox; }
-          P[i].x-=nx*pen*ia/is; P[i].y-=ny*pen*ia/is;
-          P[j].x+=nx*pen*ib/is; P[j].y+=ny*pen*ib/is;
+          P[i].x-=nx*pen*ia/is; P[i].y-=ny*pen*ia/is; P[i].z-=nz*pen*ia/is;
+          P[j].x+=nx*pen*ib/is; P[j].y+=ny*pen*ib/is; P[j].z+=nz*pen*ib/is;
           var ui=models[i].userData, uj=models[j].userData;
-          var vn=(uj.vx-ui.vx)*nx+(uj.vy-ui.vy)*ny;
+          var vn=(uj.vx-ui.vx)*nx+(uj.vy-ui.vy)*ny+(uj.vz-ui.vz)*nz;
           if(vn<0){
             var jm=-(1+E)*vn/is;
-            ui.vx-=jm*ia*nx; ui.vy-=jm*ia*ny; uj.vx+=jm*ib*nx; uj.vy+=jm*ib*ny;
+            ui.vx-=jm*ia*nx; ui.vy-=jm*ia*ny; ui.vz-=jm*ia*nz; uj.vx+=jm*ib*nx; uj.vy+=jm*ib*ny; uj.vz+=jm*ib*nz;
           }
-          if(ny!==0){ var fr=Math.pow(0.9,dt*60/SUB); ui.vx*=fr; uj.vx*=fr; }
+          if(ny!==0){ var fr=Math.pow(0.9,dt*60/SUB); ui.vx*=fr; uj.vx*=fr; ui.vz*=fr; uj.vz*=fr; }
         }
       }
     }
-    for(i=0;i<n;i++){ if(!S[i]) models[i].position.copy(group.worldToLocal(P[i].clone())); }
+    for(i=0;i<n;i++){ if(!S[i]) models[i].position.copy(group.worldToLocal(P[i].clone().add(OFF[i]))); }
+    if(sel) syncDepth();
   }
   select(null);
 
@@ -451,8 +758,9 @@ body.over #drop{display:flex}
       select(root); mStart0.copy(group.worldToLocal(wStart.clone())); mPos0.copy(root.position);
     } else if(hits.length){
       wStart.copy(hits[0].point);
-      var p=poster.worldToLocal(wStart.clone());
-      mode='bend'; start.copy(p); uniforms.uGrab.value.set(p.x,p.y);
+      var p=poster.worldToLocal(wStart.clone()), huv=hits[0].uv;
+      var gidx=sheet.near(huv.x*W,(1-huv.y)*H,0.2*uniforms.uRadius.value);
+      sheet.doGrab(gidx,[p.x,p.y,p.z]); mode='bend';
       camera.getWorldDirection(dirV); dragPlane.setFromNormalAndCoplanarPoint(dirV,wStart);
     } else mode='rotate';
   });
@@ -462,14 +770,8 @@ body.over #drop{display:flex}
       ndc.set((e.clientX-r1.left)/r1.width*2-1,-((e.clientY-r1.top)/r1.height)*2+1);
       ray.setFromCamera(ndc,camera);
       if(!ray.ray.intersectPlane(dragPlane,wCur)) return;
-      group.updateMatrixWorld(true); inv.copy(poster.matrixWorld).invert();
-      wd.copy(wCur).sub(wStart);
-      var wl=wd.length(); if(wl<1e-6){target.set(0,0,0);return;}
-      var ld=wd.clone().transformDirection(inv).multiplyScalar(wl);
-      var sgn=poster.worldToLocal(camera.position.clone()).z>=0?1:-1;
-      var pl=Math.hypot(ld.x,ld.y), ps=pl>2.6?2.6/pl:1;
-      var zz=ld.z+sgn*pl*ps*0.9;
-      target.set(ld.x*ps,ld.y*ps,Math.max(-2.6,Math.min(2.6,zz)));
+      group.updateMatrixWorld(true);
+      var lg=poster.worldToLocal(wCur.clone()); sheet.moveGrab([lg.x,lg.y,lg.z]);
     } else if(mode==='model'&&sel){
       var r2=canvas.getBoundingClientRect();
       ndc.set((e.clientX-r2.left)/r2.width*2-1,-((e.clientY-r2.top)/r2.height)*2+1);
@@ -477,16 +779,22 @@ body.over #drop{display:flex}
       if(!ray.ray.intersectPlane(dragPlane,wCur)) return;
       group.updateMatrixWorld(true);
       var lc=group.worldToLocal(wCur.clone());
-      sel.position.x=mPos0.x+lc.x-mStart0.x;
-      sel.position.y=mPos0.y+lc.y-mStart0.y;
+      if(e.shiftKey){
+        sel.position.z=Math.max(-4,Math.min(4,sel.position.z+(lastY-e.clientY)*0.02));
+        mPos0.x=sel.position.x; mPos0.y=sel.position.y; mStart0.copy(lc);
+      } else {
+        sel.position.x=mPos0.x+lc.x-mStart0.x;
+        sel.position.y=mPos0.y+lc.y-mStart0.y;
+      }
+      lastX=e.clientX; lastY=e.clientY; syncDepth();
     } else if(mode==='rotate'){
       rotT.y+=(e.clientX-lastX)*0.008; rotT.x+=(e.clientY-lastY)*0.008;
       rotT.x=Math.max(-1.2,Math.min(1.2,rotT.x)); lastX=e.clientX; lastY=e.clientY;
     }
   });
-  function up(){mode=null;target.set(0,0,0);canvas.classList.remove('drag');}
+  function up(){if(mode==='bend'&&sheet)sheet.release(); mode=null;canvas.classList.remove('drag');}
   canvas.addEventListener('pointerup',up); canvas.addEventListener('pointercancel',up);
-  canvas.addEventListener('wheel',function(e){e.preventDefault();camZT=Math.max(ZMIN,Math.min(ZMAX,camZT*Math.exp(e.deltaY*(e.ctrlKey?0.012:0.0025))));},{passive:false});
+  canvas.addEventListener('wheel',function(e){e.preventDefault();if(mode==='model'&&sel){sel.position.z=Math.max(-4,Math.min(4,sel.position.z-e.deltaY*0.004));syncDepth();return;}camZT=Math.max(ZMIN,Math.min(ZMAX,camZT*Math.exp(e.deltaY*(e.ctrlKey?0.012:0.0025))));},{passive:false});
   document.getElementById('reset').onclick=function(){rotT.x=rotT.y=0;camZT=8.5;};
 
 
@@ -603,7 +911,7 @@ body.over #drop{display:flex}
   function tpd(){var k=Object.keys(tp);return Math.hypot(tp[k[0]].x-tp[k[1]].x,tp[k[0]].y-tp[k[1]].y);}
   canvas.addEventListener('pointerdown',function(e){
     if(e.pointerType!=='touch') return; tp[e.pointerId]={x:e.clientX,y:e.clientY};
-    if(Object.keys(tp).length===2){ mode=null; target.set(0,0,0); pd0=Math.max(tpd(),10); pz0=camZT; }
+    if(Object.keys(tp).length===2){ if(mode==='bend'&&sheet)sheet.release(); mode=null; pd0=Math.max(tpd(),10); pz0=camZT; }
   });
   canvas.addEventListener('pointermove',function(e){
     if(!tp[e.pointerId]) return; tp[e.pointerId]={x:e.clientX,y:e.clientY};
@@ -653,6 +961,8 @@ body.over #drop{display:flex}
     shred=null; poster.visible=true; flameMesh.visible=true; shadow.visible=true;
     shredBtn.textContent='Shred poster';
   }
+  document.getElementById('fold').onclick=startFold; document.getElementById('unfold').onclick=startUnfold; foldBtns();
+  document.getElementById('flatten').onclick=function(){ if(sheet) sheet.smooth(); };
   shredBtn.onclick=function(){ if(shred) restoreShred(); else startShred(); };
   var _v=new THREE.Vector3(), _d=new THREE.Vector3();
   function updateShred(dt){
@@ -670,7 +980,7 @@ body.over #drop{display:flex}
         } else {
           for(k=0;k<NN;k++){
             var ly=H/2-k*L, e=ly<sy?Math.min(1,(sy-ly)/0.9):0; e=e*e*(3-2*e);
-            _v.set(st.cx*(1+0.14*e), ly, Math.sin(tn*4+st.i*0.8)*0.05*e*(k/NN));
+            simPt(st.cx*(1+0.14*e), ly, _po, Math.sin(tn*4+st.i*0.8)*0.05*e*(k/NN)); _v.set(_po.x,_po.y,_po.z);
             p[k].copy(poster.localToWorld(_v)); q[k].copy(p[k]);
           }
         }
@@ -713,10 +1023,7 @@ body.over #drop{display:flex}
   function tick(){
     var dt=Math.min(clock.getDelta(),1/30);
     uniforms.uTime.value+=dt;
-    // spring: paper follows the drag and wobbles back on release
-    var k=mode==='bend'?200:110, c=mode==='bend'?20:9;
-    vel.x+=(-(pull.x-target.x)*k-vel.x*c)*dt; vel.y+=(-(pull.y-target.y)*k-vel.y*c)*dt; vel.z+=(-(pull.z-target.z)*k-vel.z*c)*dt;
-    pull.addScaledVector(vel,dt); uniforms.uPull.value.copy(pull);
+    if(!shred) stepSheet(dt);
     rot.x+=(rotT.x-rot.x)*0.12; rot.y+=(rotT.y-rot.y)*0.12;
     var t=uniforms.uTime.value, wd=uniforms.uWind.value, gs=0.65+0.35*Math.sin(t*0.7)*Math.sin(t*0.31+1);
     group.rotation.set(rot.x+Math.sin(t*1.3)*0.025*wd*gs, rot.y+Math.sin(t*0.9)*0.06*wd*gs, Math.sin(t*1.1)*0.04*wd*gs);
