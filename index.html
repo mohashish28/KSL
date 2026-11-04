@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>KSL</title>
-      <link rel="icon" type="image/png" href="kslicon.png">
+          <link rel="icon" type="image/png" href="favicon.png"
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -19,6 +19,8 @@ body{background:radial-gradient(120% 90% at 30% 20%,var(--bg1),var(--bg2));color
 #stage{position:fixed;inset:0}
 canvas{display:block;width:100%;height:100%;cursor:grab}
 canvas.drag{cursor:grabbing}
+canvas.rip{cursor:crosshair}
+#ripRing{position:fixed;left:0;top:0;border:2px dashed rgba(255,255,255,.85);border-radius:50%;pointer-events:none;display:none;z-index:3;box-shadow:0 0 0 1px rgba(0,0,0,.5)}
 #hint{position:fixed;left:24px;top:calc(20px + env(safe-area-inset-top,0px));pointer-events:none}
 #hint h1{font:700 22px/1.1 "Bricolage Grotesque",system-ui,sans-serif;margin:0 0 6px;letter-spacing:-.01em}
 #hint p{margin:0;color:var(--muted);font-size:13px;line-height:1.45;max-width:260px}
@@ -63,6 +65,7 @@ body.over #drop{display:flex}
 <div id="drop">Drop your image</div>
 <div id="cam"><div class="m"><video id="vid" playsinline muted></video><canvas id="ov" width="320" height="240"></canvas></div></div>
 <div id="hc"></div>
+<div id="ripRing"></div>
 
 <div id="panel">
   <h2>Studio controls <button id="toggle" aria-label="Collapse controls">Hide</button></h2>
@@ -92,6 +95,10 @@ body.over #drop{display:flex}
     <div class="row"><label>Crumple <b id="vCr">0%</b></label><input id="crumple" type="range" min="0" max="1" step="0.005" value="0"></div>
     <div class="btns"><button id="fold">Fold in half</button><button id="unfold" disabled>Unfold</button></div>
     <div class="btns"><button id="flatten">Flatten paper</button></div>
+    <div class="sep"></div>
+    <div class="btns"><button id="rip">Ripping mode: Off</button><button id="ripReset">Restore paper</button></div>
+    <div class="row" style="margin-top:10px"><label>Grab size <b id="vRip">35%</b></label><input id="ripSize" type="range" min="0" max="1" step="0.005" value="0.35"></div>
+    <div id="ripStat" style="font-size:12px;color:var(--muted);line-height:1.4;margin:0 0 12px">Turn ripping mode on, then grab the poster. Small sizes tear off small scraps, large sizes rip off big chunks. Let go and the piece falls to the floor.</div>
     <div class="btns"><button id="shred">Shred poster</button><button id="hand">Hand control</button></div>
     <div id="stat">Use your webcam: pinch thumb and index finger to grab and drag. Zoom: pinch with both hands and spread, or hold up two fingers and move your hand toward or away from the camera.</div>
   </div>
@@ -140,13 +147,16 @@ body.over #drop{display:flex}
     '  gl_Position=projectionMatrix*viewMatrix*vec4(vWPos,1.0); }'].join('\n');
   var vertFlame=['attribute vec2 plane; varying vec2 vLP;','void main(){ vLP=plane; gl_Position=projectionMatrix*viewMatrix*modelMatrix*vec4(position,1.0); }'].join('\n');
   var frag=[
-  'uniform sampler2D uMap; uniform vec3 uLightPos; uniform float uLight,uAmb,uGloss,uPix,uHalf,uHSize,uFire,uFlame,uTime,uFlat; uniform vec2 uSize;',
+  'uniform sampler2D uMap; uniform sampler2D uRip; uniform sampler2D uRipS; uniform vec3 uLightPos; uniform float uLight,uAmb,uGloss,uPix,uHalf,uHSize,uFire,uFlame,uTime,uFlat,uAO; uniform vec2 uSize;',
   'varying vec2 vUv; varying vec3 vWPos; varying vec3 vN;',
   'float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }',
   'float vn(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f); return mix(mix(hash(i),hash(i+vec2(1.0,0.0)),f.x),mix(hash(i+vec2(0.0,1.0)),hash(i+vec2(1.0,1.0)),f.x),f.y); }',
   'float fbm(vec2 p){ float a=0.5,s=0.0; for(int i=0;i<4;i++){ s+=a*vn(p); p=p*2.03+7.1; a*=0.5; } return s; }',
   'void main(){',
   '  vec2 uv=vUv;',
+  '  float m0=texture2D(uRip,vUv).r, ms=texture2D(uRipS,vUv).r;',
+  '  float nz=(fbm(vUv*uSize*34.0)-0.5)*0.9+(fbm(vUv*uSize*125.0+3.1)-0.5)*0.8;',
+  '  float ew=clamp(4.0*m0*(1.0-m0),0.0,1.0); nz*=ew; if(m0+nz<0.5) discard;',
   '  if(uPix>0.01){ float cells=exp(mix(log(500.),log(12.),uPix)); vec2 g=uSize/min(uSize.x,uSize.y)*cells; uv=(floor(uv*g)+0.5)/g; }',
   '  vec3 col=texture2D(uMap,uv).rgb;',
   '  if(uHalf>0.01){',
@@ -162,6 +172,13 @@ body.over #drop{display:flex}
   '    vec3 h=mix(vec3(0.96,0.94,0.9),ink,m);',
   '    col=mix(col,h,uHalf);',
   '  }',
+  '  vec2 gd=vec2(dFdx(ms),dFdy(ms)); vec2 ed=gd/(length(gd)+1e-4);',
+  '  float lip=1.0-smoothstep(0.52,0.78,ms+nz*0.35);',
+  '  vec2 Ld=normalize(uLightPos.xy+vec2(0.0001)); float msh=texture2D(uRipS,vUv+Ld*0.075/uSize).r;',
+  '  float ao=min(1.0,(1.0-smoothstep(0.55,0.95,msh))*1.0+(1.0-smoothstep(0.6,0.98,ms))*0.18)*uAO;',
+  '  float fibr=vn(vUv*uSize*170.0+vec2(9.7,2.3));',
+  '  col=mix(col,mix(col,vec3(0.93,0.91,0.87),0.55),lip*smoothstep(0.55,0.9,fibr)*0.45);',
+  '  col*=1.0-0.5*ao;',
   '  float fd=1.0,charA=0.0,emA=0.0,fl=-1.0; vec3 flc=vec3(0.0);',
   '  if(uFire>0.005){',
   '    float b=vUv.y*0.72+fbm(vUv*uSize*1.8+3.7)*0.42;',
@@ -177,6 +194,7 @@ body.over #drop{display:flex}
   '  }',
   '  vec3 n=normalize(vN);',
   '  if(uFlat>0.0){ vec3 fn=normalize(cross(dFdx(vWPos),dFdy(vWPos))); if(dot(fn,n)<0.0) fn=-fn; n=normalize(mix(n,fn,uFlat)); }',
+  '  n=normalize(n+vec3(ed*lip*1.6,0.0));',
   '  if(!gl_FrontFacing){ n=-n; col=vec3(0.92,0.9,0.85); }',
   '  float gr=hash(floor(vUv*uSize*160.));',
   '  n=normalize(n+vec3(gr-0.5,hash(vUv*91.7+3.1)-0.5,0.)*0.06);',
@@ -811,6 +829,170 @@ function presetShape(name, W, L, rnd = Math.random) {
     }
   }
 
+  // ---- ripping: a grabbed piece tears off along a random ragged edge and falls to the floor ----
+  // the poster keeps a per-pixel "still there" mask (uRip); torn pixels are discarded in the shader, so edges are ragged at pixel level
+  var ripOn=false, ripT=0.35, ripMW=2, ripMH=2, ripPresent=null, ripTex=null, ripTexS=null, ripDataA=null, ripDataB=null, ripCv=null, scraps=[], scrapN=0, ripScrap=null, RIP_MAX=40, RIP_LIE=-1.05;
+  var ripWhite=new THREE.DataTexture(new Uint8Array([255,255,255,255]),1,1,THREE.RGBAFormat); ripWhite.needsUpdate=true;
+  uniforms.uRip={value:ripWhite}; uniforms.uRipS={value:ripWhite}; uniforms.uAO={value:1};
+  var _ripX=new THREE.Vector3(1,0,0), _rq=new THREE.Quaternion(), _rq2=new THREE.Quaternion(), _rE=new THREE.Euler(), _ripZ=new THREE.Vector3(0,0,1), _ripY=new THREE.Vector3(0,1,0), _rv=new THREE.Vector3(), _rpt={x:0,y:0,z:0};
+  function ripRadius(){ return 0.1+1.5*ripT*ripT; } // world units: small slider = small scrap, large = big chunk
+  function lumTex(data,w,h){ var t=new THREE.DataTexture(data,w,h,THREE.LuminanceFormat,THREE.UnsignedByteType); t.minFilter=t.magFilter=THREE.LinearFilter; t.generateMipmaps=false; t.unpackAlignment=1; t.needsUpdate=true; return t; }
+  // box blur of one rectangle of a 0/255 mask (repeated passes ~ a gaussian); only the changed area is redone
+  function blurRegion(src,w,h,rx0,ry0,rx1,ry1,r,passes,dst){
+    var E=r*passes,wx0=Math.max(0,rx0-E),wy0=Math.max(0,ry0-E),wx1=Math.min(w-1,rx1+E),wy1=Math.min(h-1,ry1+E),ww=wx1-wx0+1,wh=wy1-wy0+1;
+    var a=new Float32Array(ww*wh),b=new Float32Array(ww*wh),inv=1/(2*r+1),x,y,k,s,p,row;
+    for(y=0;y<wh;y++)for(x=0;x<ww;x++)a[y*ww+x]=src[(y+wy0)*w+x+wx0]/255;
+    for(p=0;p<passes;p++){
+      for(y=0;y<wh;y++){ row=y*ww; s=0; for(k=-r;k<=r;k++) s+=a[row+Math.min(ww-1,Math.max(0,k))];
+        for(x=0;x<ww;x++){ b[row+x]=s*inv; s+=a[row+Math.min(ww-1,x+r+1)]-a[row+Math.max(0,x-r)]; } }
+      for(x=0;x<ww;x++){ s=0; for(k=-r;k<=r;k++) s+=b[Math.min(wh-1,Math.max(0,k))*ww+x];
+        for(y=0;y<wh;y++){ a[y*ww+x]=s*inv; s+=b[Math.min(wh-1,y+r+1)*ww+x]-b[Math.max(0,y-r)*ww+x]; } }
+    }
+    for(y=ry0;y<=ry1;y++)for(x=rx0;x<=rx1;x++)dst[y*w+x]=Math.round(a[(y-wy0)*ww+(x-wx0)]*255);
+  }
+  var RIP_P1=5, RIP_P2=34; // how far the sharp (r2) and soft (r11) blurs reach past a changed area
+  function ripBlurBoth(src,bx0,by0,bx1,by1,dA,dB){
+    blurRegion(src,ripMW,ripMH,Math.max(0,bx0-RIP_P1),Math.max(0,by0-RIP_P1),Math.min(ripMW-1,bx1+RIP_P1),Math.min(ripMH-1,by1+RIP_P1),2,2,dA);
+    blurRegion(src,ripMW,ripMH,Math.max(0,bx0-RIP_P2),Math.max(0,by0-RIP_P2),Math.min(ripMW-1,bx1+RIP_P2),Math.min(ripMH-1,by1+RIP_P2),11,3,dB);
+  }
+  function ripClearScraps(){
+    scraps.forEach(function(sc){ scene.remove(sc.mesh); sc.geo.dispose(); sc.mat.dispose(); sc.tex.dispose(); sc.texS.dispose(); });
+    scraps=[]; scrapN=0; ripScrap=null;
+  }
+  function ripResetMask(){ // new poster size → fresh, whole paper
+    ripClearScraps();
+    var m=768; ripMW=W>=H?m:Math.max(8,Math.round(m*W/H)); ripMH=W>=H?Math.max(8,Math.round(m*H/W)):m;
+    var n=ripMW*ripMH;
+    ripPresent=new Uint8Array(n).fill(255); ripDataA=new Uint8Array(n).fill(255); ripDataB=new Uint8Array(n).fill(255);
+    if(ripTex&&uniforms.uRip.value===ripTex){ ripTex.dispose(); ripTexS.dispose(); }
+    ripTex=lumTex(ripDataA,ripMW,ripMH); ripTexS=lumTex(ripDataB,ripMW,ripMH); uniforms.uRip.value=ripTex; uniforms.uRipS.value=ripTexS;
+    ripCv=document.createElement('canvas'); ripCv.width=ripMW; ripCv.height=ripMH;
+  }
+  function ripRestore(){
+    if(!ripPresent) return; ripClearScraps(); ripPresent.fill(255); ripDataA.fill(255); ripDataB.fill(255); ripTex.needsUpdate=true; ripTexS.needsUpdate=true;
+  }
+  function ripTorn(uv){ // is this spot of the poster already gone?
+    if(!ripPresent||!uv) return false;
+    var x=Math.min(ripMW-1,Math.max(0,Math.floor(uv.x*ripMW))),y=Math.min(ripMH-1,Math.max(0,Math.floor(uv.y*ripMH)));
+    return ripPresent[y*ripMW+x]===0;
+  }
+  // a random torn outline: a lumpy blob whose edge is broken up again and again at finer and finer scales, like paper pulled apart
+  function ripShape(cx,cy,R){
+    var M=9+Math.floor(Math.random()*6),pts=[],asp=0.55+0.45*Math.random(),rot=Math.random()*6.283,ox=(Math.random()-0.5)*0.3*R,oy=(Math.random()-0.5)*0.3*R,i,a,it;
+    var cr=Math.cos(rot),sr=Math.sin(rot),amp=[0.62,0.58,0.52,0.46,0.4,0.34];
+    for(i=0;i<M;i++){ a=(i+Math.random()*0.7)/M*6.283; var r=R*(0.6+0.55*Math.random()),x=Math.cos(a)*r,y=Math.sin(a)*r*asp;
+      pts.push([cx+ox+x*cr-y*sr,cy+oy+x*sr+y*cr]); }
+    for(it=0;it<amp.length;it++){ var nx=[];
+      for(i=0;i<pts.length;i++){ var p=pts[i],q=pts[(i+1)%pts.length],dx=q[0]-p[0],dy=q[1]-p[1],len=Math.hypot(dx,dy)||1,d=(Math.random()-0.5)*len*amp[it];
+        nx.push(p,[(p[0]+q[0])/2-dy/len*d,(p[1]+q[1])/2+dx/len*d]); }
+      pts=nx; }
+    var c=ripCv.getContext('2d'); c.fillStyle='#000'; c.fillRect(0,0,ripMW,ripMH); c.fillStyle='#fff'; c.beginPath();
+    for(i=0;i<pts.length;i++){ if(i)c.lineTo(pts[i][0],ripMH-pts[i][1]); else c.moveTo(pts[i][0],ripMH-pts[i][1]); }
+    c.closePath(); c.fill();
+    var d=c.getImageData(0,0,ripMW,ripMH).data,bin=new Uint8Array(ripMW*ripMH),x2,y2;
+    for(y2=0;y2<ripMH;y2++)for(x2=0;x2<ripMW;x2++) if(d[((ripMH-1-y2)*ripMW+x2)*4]>127) bin[y2*ripMW+x2]=255;
+    return bin;
+  }
+  // tear a piece off the paper where it was grabbed; returns the loose scrap (or null if nothing came away)
+  function doRip(uv){
+    var S=sheet; if(!S||!ripPresent) return null;
+    var Rpx=ripRadius()*ripMW/W, shape=ripShape(uv.x*ripMW,uv.y*ripMH,Rpx), n=ripMW*ripMH, bin=new Uint8Array(n), cnt=0, sxs=0, sys=0, i, x, y, bx0=ripMW, bx1=-1, by0=ripMH, by1=-1;
+    for(y=0;y<ripMH;y++)for(x=0;x<ripMW;x++){ i=y*ripMW+x; if(shape[i]&&ripPresent[i]){ bin[i]=255; cnt++; sxs+=x; sys+=y; if(x<bx0)bx0=x; if(x>bx1)bx1=x; if(y<by0)by0=y; if(y>by1)by1=y; } }
+    if(cnt<40) return null;
+    for(i=0;i<n;i++) if(bin[i]) ripPresent[i]=0;
+    ripBlurBoth(ripPresent,bx0,by0,bx1,by1,ripDataA,ripDataB); ripTex.needsUpdate=true; ripTexS.needsUpdate=true;
+    // the grid cells the piece covers become the scrap's mesh (taken from the paper exactly as it is bent right now)
+    var nx=S.nx,ny=S.ny,X=nx+1,use=new Int32Array(X*(ny+1)).fill(-1),vs=[],idx=[],k,j,ax,ay,hit,c4;
+    for(j=0;j<ny;j++)for(k=0;k<nx;k++){
+      var x0=Math.floor(k/nx*ripMW),x1=Math.min(ripMW-1,Math.ceil((k+1)/nx*ripMW)),y0=Math.floor((1-(j+1)/ny)*ripMH),y1=Math.min(ripMH-1,Math.ceil((1-j/ny)*ripMH));
+      hit=false;
+      for(ay=y0;ay<=y1&&!hit;ay+=2)for(ax=x0;ax<=x1;ax+=2) if(bin[ay*ripMW+ax]){ hit=true; break; }
+      if(!hit) continue;
+      c4=[j*X+k,j*X+k+1,(j+1)*X+k,(j+1)*X+k+1];
+      for(i=0;i<4;i++) if(use[c4[i]]<0){ use[c4[i]]=vs.length; vs.push(c4[i]); }
+      idx.push(use[c4[0]],use[c4[2]],use[c4[1]],use[c4[2]],use[c4[3]],use[c4[1]]);
+    }
+    if(!vs.length) return null;
+    var W2=W/2,H2=H/2,cxf=(sxs/cnt/ripMW)*W-W2,cyf=(sys/cnt/ripMH)*H-H2;
+    simPt(cxf,cyf,_rpt,0); var cx=_rpt.x,cy=_rpt.y,cz=_rpt.z; // the piece's own centre
+    var m=vs.length,pos=new Float32Array(m*3),flat=new Float32Array(m*3),nm=new Float32Array(m*3),uvs=new Float32Array(m*2),pu=poster.geometry.attributes.uv.array,v0;
+    for(i=0;i<m;i++){ v0=vs[i];
+      pos[3*i]=S.p[3*v0]-cx; pos[3*i+1]=S.p[3*v0+1]-cy; pos[3*i+2]=S.p[3*v0+2]-cz;
+      flat[3*i]=S.u[v0]-W2-cxf; flat[3*i+1]=H2-S.v[v0]-cyf; flat[3*i+2]=0; // the same piece as it lies once it is let go
+      nm[3*i]=-S.nq[3*v0]; nm[3*i+1]=-S.nq[3*v0+1]; nm[3*i+2]=-S.nq[3*v0+2];
+      uvs[2*i]=pu[2*v0]; uvs[2*i+1]=pu[2*v0+1]; }
+    var geo=new THREE.BufferGeometry(); geo.setAttribute('position',new THREE.BufferAttribute(pos,3)); geo.setAttribute('normal',new THREE.BufferAttribute(nm,3)); geo.setAttribute('uv',new THREE.BufferAttribute(uvs,2)); geo.setIndex(idx);
+    var dA=new Uint8Array(n),dB=new Uint8Array(n); ripBlurBoth(bin,bx0,by0,bx1,by1,dA,dB);
+    var texA=lumTex(dA,ripMW,ripMH),texB=lumTex(dB,ripMW,ripMH),su=Object.assign({},uniforms); su.uRip={value:texA}; su.uRipS={value:texB}; su.uAO={value:0};
+    var mat2=new THREE.ShaderMaterial({uniforms:su,vertexShader:vertSim,fragmentShader:frag,side:THREE.DoubleSide,extensions:{derivatives:true}});
+    var mesh=new THREE.Mesh(geo,mat2); mesh.frustumCulled=false; scene.add(mesh);
+    // the edge of the scrap, used for the floor contact: on the bent sheet now, and flat once it has relaxed
+    var edge=[]; for(y=0;y<ripMH;y++)for(x=0;x<ripMW;x++){ i=y*ripMW+x; if(!bin[i]) continue;
+      if(x===0||y===0||x===ripMW-1||y===ripMH-1||!bin[i-1]||!bin[i+1]||!bin[i-ripMW]||!bin[i+ripMW]) edge.push(x,y); }
+    var step=Math.max(1,Math.ceil(edge.length/2/320)),ptsB=[],ptsF=[],ex,ey;
+    group.updateMatrixWorld(true);
+    var qB=group.getWorldQuaternion(new THREE.Quaternion());
+    for(i=0;i<edge.length/2;i+=step){ ex=((edge[2*i]+0.5)/ripMW)*W-W2; ey=((edge[2*i+1]+0.5)/ripMH)*H-H2;
+      simPt(ex,ey,_rpt,0); ptsB.push(_rpt.x-cx,_rpt.y-cy,_rpt.z-cz); ptsF.push(ex-cxf,ey-cyf,0); }
+    var wp=group.localToWorld(new THREE.Vector3(cx,cy,cz)); mesh.position.copy(wp); mesh.quaternion.copy(qB);
+    var qF=new THREE.Quaternion(); if(_rv.copy(_ripZ).applyQuaternion(qB).z<0) qF.setFromAxisAngle(_ripY,Math.PI);
+    var sc={mesh:mesh,geo:geo,mat:mat2,tex:texA,texS:texB,posArr:pos,bent:pos.slice(),flat:flat,ptsB:new Float32Array(ptsB),ptsF:new Float32Array(ptsF),pts:new Float32Array(ptsB),
+      qBase:qB.clone(),qFace:qF,qLie:new THREE.Quaternion().setFromAxisAngle(_ripX,RIP_LIE),th:0,vx:0,vy:0,om:0,age:0,relax:0,ph:Math.random()*6.283,
+      held:true,asleep:false,still:0,floorT:0,contact:false,lastT:performance.now(),start:wp.clone(),zHeld:Math.max(0,wp.z)+0.35,zRest:0.14+0.012*(scrapN++)};
+    scraps.push(sc);
+    if(scraps.length>RIP_MAX){ var old=scraps.shift(); scene.remove(old.mesh); old.geo.dispose(); old.mat.dispose(); old.tex.dispose(); old.texS.dispose(); if(ripScrap===old)ripScrap=null; }
+    return sc;
+  }
+  // once let go the scrap stops being bent like the sheet it came from and lies flat
+  function relaxScrap(sc){
+    var e=sc.relax*sc.relax*(3-2*sc.relax),a=sc.posArr,b=sc.bent,f=sc.flat,i;
+    for(i=0;i<a.length;i++) a[i]=b[i]+(f[i]-b[i])*e;
+    sc.geo.attributes.position.needsUpdate=true; sc.geo.computeVertexNormals();
+    var pb=sc.ptsB,pf=sc.ptsF,pp=sc.pts; for(i=0;i<pp.length;i++) pp[i]=pb[i]+(pf[i]-pb[i])*e;
+  }
+  // loose scraps: they flutter down, tip over to lie on the floor (the bottom edge of the canvas), and rest there
+  function stepScraps(dt){
+    if(!scraps.length) return;
+    var tH=tanHalf,cz=camera.position.z,asp=camera.aspect,sub=2,h=dt/sub,si,i,p,sc,m;
+    for(si=0;si<scraps.length;si++){
+      sc=scraps[si]; m=sc.mesh;
+      if(sc.held){
+        m.position.z+=(sc.zHeld-m.position.z)*Math.min(1,dt*8);
+        sc.qBase.slerp(sc.qFace,Math.min(1,dt*2)); m.quaternion.copy(sc.qBase).multiply(_rq.setFromAxisAngle(_ripZ,sc.th));
+        continue;
+      }
+      if(sc.asleep){ // zooming or resizing moves the bottom edge, so a resting scrap has to find the floor again
+        if(Math.abs(cz-sc.camZ)>0.02||Math.abs(asp-sc.asp)>0.01){ sc.asleep=false; sc.still=0; sc.floorT=0; } else continue;
+      }
+      sc.age+=dt;
+      if(sc.relax<1){ sc.relax=Math.min(1,sc.relax+dt/0.8); relaxScrap(sc); }
+      for(p=0;p<sub;p++){
+        var air=sc.contact?0:1;
+        sc.vy-=11*h; if(sc.vy<-4.5) sc.vy+=(-4.5-sc.vy)*Math.min(1,h*10); // paper is slowed by the air
+        sc.vx*=Math.exp(-(air?0.6:7)*h); sc.vx+=air*Math.sin(sc.age*3.1+sc.ph)*1.3*h;
+        m.position.x+=sc.vx*h; m.position.y+=sc.vy*h; sc.th+=sc.om*h; sc.om*=Math.exp(-(air?0.7:8)*h);
+        m.position.z+=(sc.zRest-m.position.z)*Math.min(1,h*5);
+        sc.qBase.slerp(sc.qLie,Math.min(1,h*(air?1.6:12)));
+        _rE.set(0.14*air*Math.sin(sc.age*4.3+sc.ph),0.14*air*Math.sin(sc.age*3.7+sc.ph*1.7),0); _rq2.setFromEuler(_rE);
+        m.quaternion.copy(sc.qBase).multiply(_rq2).multiply(_rq.setFromAxisAngle(_ripZ,sc.th));
+        sc.contact=false;
+        var pts=sc.pts,np=pts.length/3,maxPen=0,lo=0,hi=0,wx,wy,wz,fy,lim;
+        for(i=0;i<np;i++){
+          _rv.set(pts[3*i],pts[3*i+1],pts[3*i+2]).applyQuaternion(m.quaternion);
+          wx=_rv.x+m.position.x; wy=_rv.y+m.position.y; wz=_rv.z+m.position.z;
+          fy=-(cz-wz)*tH; if(wy<fy&&fy-wy>maxPen) maxPen=fy-wy;
+          lim=(cz-wz)*tH*asp; if(wx+lim<lo)lo=wx+lim; if(wx-lim>hi)hi=wx-lim;
+        }
+        if(lo<0){ m.position.x-=lo; if(sc.vx<0)sc.vx=-sc.vx*0.3; }
+        if(hi>0){ m.position.x-=hi; if(sc.vx>0)sc.vx=-sc.vx*0.3; }
+        if(maxPen>0){ sc.contact=true; m.position.y+=maxPen; if(sc.vy<0) sc.vy=sc.vy<-2?-sc.vy*0.12:0; }
+      }
+      sc.floorT=sc.contact?sc.floorT+dt:0;
+      if(sc.contact&&sc.floorT>0.5&&Math.abs(sc.vx)+Math.abs(sc.vy)<0.1&&Math.abs(sc.om)<0.1){ sc.still+=dt; if(sc.still>0.3){ sc.asleep=true; sc.camZ=cz; sc.asp=asp; sc.vx=sc.vy=sc.om=0; } } else sc.still=0;
+      if(!sc.asleep&&sc.floorT>1.6&&Math.abs(sc.vx)+Math.abs(sc.vy)<0.6&&Math.abs(sc.om)<2){ sc.asleep=true; sc.camZ=cz; sc.asp=asp; sc.vx=sc.vy=sc.om=0; }
+    }
+  }
+
   function setImage(img){
     var tex=new THREE.Texture(img); tex.needsUpdate=true; tex.minFilter=THREE.LinearMipmapLinearFilter;
     tex.anisotropy=renderer.capabilities.getMaxAnisotropy();
@@ -821,6 +1003,7 @@ function presetShape(name, W, L, rnd = Math.random) {
     poster.geometry.dispose();
     folds=[];foldAnim=null;foldBtns(); sheet=new Sheet(W,H); poster.geometry=new THREE.PlaneGeometry(W,H,sheet.nx,sheet.ny); poster.frustumCulled=false;
     uniforms.uSize.value.set(W,H);
+    ripResetMask();
     if(shred) restoreShred();
     setFlameGeom();
     shadow.scale.set(W*1.15,H*1.15,1);
@@ -1039,13 +1222,19 @@ function presetShape(name, W, L, rnd = Math.random) {
     var r0=canvas.getBoundingClientRect();
     ndc.set((e.clientX-r0.left)/r0.width*2-1,-((e.clientY-r0.top)/r0.height)*2+1);
     ray.setFromCamera(ndc,camera); group.updateMatrixWorld(true);
-    var hits=(shred||(sheet&&sheet.tgt))?[]:ray.intersectObject(poster);
+    var hits=(shred||(sheet&&sheet.tgt))?[]:ray.intersectObject(poster).filter(function(h){return !ripTorn(h.uv);});
     var mh=models.length?ray.intersectObjects(models,true):[];
     if(mh.length&&(!hits.length||mh[0].distance<hits[0].distance)){
       mode='model'; wStart.copy(mh[0].point);
       camera.getWorldDirection(dirV); dragPlane.setFromNormalAndCoplanarPoint(dirV,wStart);
       var root=mh[0].object; while(root.parent&&root.parent!==group) root=root.parent;
       select(root); mStart0.copy(group.worldToLocal(wStart.clone())); mPos0.copy(root.position);
+    } else if(hits.length&&ripOn){
+      var rs=doRip(hits[0].uv);
+      if(rs){
+        mode='rip'; ripScrap=rs; wStart.copy(hits[0].point); camera.getWorldDirection(dirV); dragPlane.setFromNormalAndCoplanarPoint(dirV,wStart);
+        rs.start=rs.mesh.position.clone(); rs.lastT=performance.now();
+      } else mode='rotate';
     } else if(hits.length){
       wStart.copy(hits[0].point);
       var p=poster.worldToLocal(wStart.clone()), huv=hits[0].uv;
@@ -1062,6 +1251,14 @@ function presetShape(name, W, L, rnd = Math.random) {
       if(!ray.ray.intersectPlane(dragPlane,wCur)) return;
       group.updateMatrixWorld(true);
       var lg=poster.worldToLocal(wCur.clone()); sheet.moveGrab([lg.x,lg.y,lg.z]);
+    } else if(mode==='rip'&&ripScrap){
+      var r3=canvas.getBoundingClientRect(), rsc=ripScrap;
+      ndc.set((e.clientX-r3.left)/r3.width*2-1,-((e.clientY-r3.top)/r3.height)*2+1);
+      ray.setFromCamera(ndc,camera);
+      if(!ray.ray.intersectPlane(dragPlane,wCur)) return;
+      var nx3=rsc.start.x+wCur.x-wStart.x, ny3=rsc.start.y+wCur.y-wStart.y, now3=performance.now(), dt3=Math.max(8,now3-rsc.lastT)/1000;
+      rsc.vx=Math.max(-14,Math.min(14,rsc.vx*0.5+0.5*(nx3-rsc.mesh.position.x)/dt3)); rsc.vy=Math.max(-14,Math.min(14,rsc.vy*0.5+0.5*(ny3-rsc.mesh.position.y)/dt3));
+      rsc.mesh.position.x=nx3; rsc.mesh.position.y=ny3; rsc.lastT=now3;
     } else if(mode==='model'&&sel){
       var r2=canvas.getBoundingClientRect();
       ndc.set((e.clientX-r2.left)/r2.width*2-1,-((e.clientY-r2.top)/r2.height)*2+1);
@@ -1082,7 +1279,14 @@ function presetShape(name, W, L, rnd = Math.random) {
       rotT.x=Math.max(-1.2,Math.min(1.2,rotT.x)); lastX=e.clientX; lastY=e.clientY;
     }
   });
-  function up(){if(mode==='bend'&&sheet)sheet.release(); mode=null;canvas.classList.remove('drag');}
+  function up(){
+    if(mode==='bend'&&sheet)sheet.release();
+    if(mode==='rip'&&ripScrap){ // let go: the torn piece falls, carrying the speed it was dragged at
+      var rs=ripScrap; rs.held=false; if(performance.now()-rs.lastT>90){ rs.vx*=0.2; rs.vy*=0.2; }
+      rs.om=(Math.random()-0.5)*3+rs.vx*0.12; ripScrap=null;
+    }
+    mode=null;canvas.classList.remove('drag');
+  }
   canvas.addEventListener('pointerup',up); canvas.addEventListener('pointercancel',up);
   canvas.addEventListener('wheel',function(e){e.preventDefault();if(mode==='model'&&sel){sel.position.z=Math.max(-4,Math.min(4,sel.position.z-e.deltaY*0.004));syncDepth();return;}camZT=Math.max(ZMIN,Math.min(ZMAX,camZT*Math.exp(e.deltaY*(e.ctrlKey?0.012:0.0025))));},{passive:false});
   document.getElementById('reset').onclick=function(){rotT.x=rotT.y=0;camZT=8.5;};
@@ -1315,11 +1519,27 @@ function presetShape(name, W, L, rnd = Math.random) {
     });
   }
 
+  // ---- ripping mode controls ----
+  var ripBtn=document.getElementById('rip'), ripRing=document.getElementById('ripRing'), ripPX=-1, ripPY=-1;
+  function ripRingUpdate(){
+    if(!ripOn||ripPX<0){ ripRing.style.display='none'; return; }
+    var r=canvas.getBoundingClientRect(), dpx=2*ripRadius()*(r.height/(2*camera.position.z*tanHalf));
+    ripRing.style.width=ripRing.style.height=dpx+'px'; ripRing.style.left=(ripPX-dpx/2)+'px'; ripRing.style.top=(ripPY-dpx/2)+'px'; ripRing.style.display='block';
+  }
+  ripBtn.onclick=function(){
+    ripOn=!ripOn; ripBtn.textContent='Ripping mode: '+(ripOn?'On':'Off'); canvas.classList.toggle('rip',ripOn); ripRingUpdate();
+  };
+  document.getElementById('ripReset').onclick=ripRestore;
+  bind('ripSize','vRip',function(v){return Math.round(v*100)+'%'},function(v){ripT=v; ripRingUpdate();});
+  canvas.addEventListener('pointermove',function(e){ ripPX=e.clientX; ripPY=e.clientY; ripRingUpdate(); });
+  canvas.addEventListener('pointerleave',function(){ ripPX=-1; ripRingUpdate(); });
+
   var clock=new THREE.Clock();
   function tick(){
     var dt=Math.min(clock.getDelta(),1/30);
     uniforms.uTime.value+=dt;
     if(!shred) stepSheet(dt);
+    stepScraps(dt);
     rot.x+=(rotT.x-rot.x)*0.12; rot.y+=(rotT.y-rot.y)*0.12;
     var t=uniforms.uTime.value, wd=uniforms.uWind.value, gs=0.65+0.35*Math.sin(t*0.7)*Math.sin(t*0.31+1);
     group.rotation.set(rot.x+Math.sin(t*1.3)*0.025*wd*gs, rot.y+Math.sin(t*0.9)*0.06*wd*gs, Math.sin(t*1.1)*0.04*wd*gs);
