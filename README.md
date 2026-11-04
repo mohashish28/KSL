@@ -12,6 +12,8 @@ No build step, no install, no backend. Everything lives in `KSL.html`.
 - **Crumple** slider with three crease styles (Zigzag, Accordion, Fan) and a **Random crumple** button for a new pattern.
 - **Fold in half / Unfold**, up to 7 folds, each one folds the stack again.
 - **Flatten paper** resets every fold and crease.
+- **Ripping mode** tears the paper. Turn it on, then grab the poster and pull: the part you grab rips off along a random ragged edge and falls to the bottom edge of the canvas. The **Grab size** slider sets how big the tear is, from a small scrap to a large chunk, and a dashed ring shows the size under your pointer. Torn pieces come to rest on the floor, and **Restore paper** puts everything back. Up to 40 loose pieces are kept, and the oldest is removed beyond that.
+- **Spray mode** lets you vandalize the poster like a street wall. Turn it on, pick a color (ten street colors or any color from the picker), set the **Spray radius**, then hold and drag over the poster. The paint is fine speckle with a soft mist, and it builds up if you keep the can on one spot. Stay put long enough and it runs in drips (the **Drips** slider sets how readily). The paint sits on the paper, so it bends, folds, burns and tears with it. **Clear paint** wipes it, and ripping and spraying can't be on at the same time.
 - **Shred poster** feeds the poster through a shredder, and the strips fall into a pile on the bottom of the canvas.
 - **Fire** burns the poster from the bottom up, with an adjustable flame length.
 - **Wind**, **Paper softness**, **Pixel filter** and **Halftone** (with dot size) change how the paper moves and looks.
