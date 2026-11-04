@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>KSL</title>
-              <link rel="icon" type="image/png" href="favicon.png"
+      <link rel="icon" type="image/png" href="favicon.png">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -19,8 +19,9 @@ body{background:radial-gradient(120% 90% at 30% 20%,var(--bg1),var(--bg2));color
 #stage{position:fixed;inset:0}
 canvas{display:block;width:100%;height:100%;cursor:grab}
 canvas.drag{cursor:grabbing}
-canvas.rip,canvas.spray{cursor:crosshair}
+canvas.rip,canvas.spray,canvas.burn{cursor:crosshair}
 #sprayRing{position:fixed;left:0;top:0;border:2px solid #fff;border-radius:50%;pointer-events:none;display:none;z-index:3;box-shadow:0 0 0 1px rgba(0,0,0,.55),inset 0 0 0 1px rgba(0,0,0,.35)}
+#burnRing{position:fixed;left:0;top:0;border:2px solid #ff9a2e;border-radius:50%;pointer-events:none;display:none;z-index:3;box-shadow:0 0 0 1px rgba(0,0,0,.55),0 0 14px 2px rgba(255,110,20,.55),inset 0 0 12px rgba(255,120,20,.35)}
 #ripRing{position:fixed;left:0;top:0;border:2px dashed rgba(255,255,255,.85);border-radius:50%;pointer-events:none;display:none;z-index:3;box-shadow:0 0 0 1px rgba(0,0,0,.5)}
 #hint{position:fixed;left:24px;top:calc(20px + env(safe-area-inset-top,0px));pointer-events:none}
 #hint h1{font:700 22px/1.1 "Bricolage Grotesque",system-ui,sans-serif;margin:0 0 6px;letter-spacing:-.01em}
@@ -68,6 +69,7 @@ body.over #drop{display:flex}
 <div id="hc"></div>
 <div id="ripRing"></div>
 <div id="sprayRing"></div>
+<div id="burnRing"></div>
 
 <div id="panel">
   <h2>Studio controls <button id="toggle" aria-label="Collapse controls">Hide</button></h2>
@@ -107,6 +109,11 @@ body.over #drop{display:flex}
     <div class="row"><label>Drips <b id="vDr">50%</b></label><input id="sprayDrip" type="range" min="0" max="1" step="0.01" value="0.5"></div>
     <div class="row"><label>Spray color</label><div style="display:flex;flex-wrap:wrap;gap:7px;align-items:center"><div id="sprayPal" style="display:contents"></div><input id="sprayCol" type="color" value="#ff2d6f" style="width:34px;height:26px;padding:0;border:none;background:none;cursor:pointer" aria-label="Pick a spray color"></div></div>
     <div id="sprayStat" style="font-size:12px;color:var(--muted);line-height:1.4;margin:0 0 12px">Turn spray mode on, then hold and drag over the poster. Keep the can on one spot to build up paint and make it run.</div>
+    <div class="sep"></div>
+    <div class="btns"><button id="burn">Flame mode: Off</button><button id="burnReset">Restore poster</button></div>
+    <div class="row" style="margin-top:10px"><label>Flame radius <b id="vBnR">30%</b></label><input id="burnR" type="range" min="0" max="1" step="0.005" value="0.3"></div>
+    <div class="row"><label>Fire spread <b id="vBnS">35%</b></label><input id="burnS" type="range" min="0" max="1" step="0.01" value="0.35"></div>
+    <div id="burnStat" style="font-size:12px;color:var(--muted);line-height:1.4;margin:0 0 12px">Turn flame mode on, then hold and drag over the poster. The paper scorches, catches fire and burns away. A higher spread lets the fire run further on its own.</div>
     <div class="btns"><button id="shred">Shred poster</button><button id="hand">Hand control</button></div>
     <div id="stat">Use your webcam: pinch thumb and index finger to grab and drag. Zoom: pinch with both hands and spread, or hold up two fingers and move your hand toward or away from the camera.</div>
   </div>
@@ -155,16 +162,23 @@ body.over #drop{display:flex}
     '  gl_Position=projectionMatrix*viewMatrix*vec4(vWPos,1.0); }'].join('\n');
   var vertFlame=['attribute vec2 plane; varying vec2 vLP;','void main(){ vLP=plane; gl_Position=projectionMatrix*viewMatrix*modelMatrix*vec4(position,1.0); }'].join('\n');
   var frag=[
-  'uniform sampler2D uMap; uniform sampler2D uRip; uniform sampler2D uRipS; uniform sampler2D uPaint; uniform vec3 uLightPos; uniform float uLight,uAmb,uGloss,uPix,uHalf,uHSize,uFire,uFlame,uTime,uFlat,uAO; uniform vec2 uSize;',
+  'uniform sampler2D uMap; uniform sampler2D uRip; uniform sampler2D uRipS; uniform sampler2D uPaint; uniform sampler2D uBurn; uniform vec2 uBR; uniform vec3 uLightPos; uniform float uLight,uAmb,uGloss,uPix,uHalf,uHSize,uFire,uFlame,uTime,uFlat,uAO; uniform vec2 uSize;',
   'varying vec2 vUv; varying vec3 vWPos; varying vec3 vN;',
   'float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }',
   'float vn(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f); return mix(mix(hash(i),hash(i+vec2(1.0,0.0)),f.x),mix(hash(i+vec2(0.0,1.0)),hash(i+vec2(1.0,1.0)),f.x),f.y); }',
   'float fbm(vec2 p){ float a=0.5,s=0.0; for(int i=0;i<4;i++){ s+=a*vn(p); p=p*2.03+7.1; a*=0.5; } return s; }',
+  'vec3 scorch(vec3 c,float b){',
+  '  c=mix(c,c*vec3(0.62,0.42,0.24),smoothstep(0.0,0.3,b));',
+  '  c=mix(c,vec3(0.065,0.045,0.035),smoothstep(0.22,0.66,b));',
+  '  return c; }',
   'void main(){',
   '  vec2 uv=vUv;',
   '  float m0=texture2D(uRip,vUv).r, ms=texture2D(uRipS,vUv).r;',
   '  float nz=(fbm(vUv*uSize*34.0)-0.5)*0.9+(fbm(vUv*uSize*125.0+3.1)-0.5)*0.8;',
   '  float ew=clamp(4.0*m0*(1.0-m0),0.0,1.0); nz*=ew; if(m0+nz<0.5) discard;',
+  '  vec4 bt=texture2D(uBurn,vUv); float bp=bt.r;',
+  '  float bnz=(fbm(vUv*uSize*46.0+7.7)-0.5)*0.45+(fbm(vUv*uSize*150.0+1.3)-0.5)*0.3;',
+  '  float bpn=bp+bnz*clamp(5.0*bp*(1.0-bp),0.0,1.0); if(bpn>0.93) discard;',
   '  if(uPix>0.01){ float cells=exp(mix(log(500.),log(12.),uPix)); vec2 g=uSize/min(uSize.x,uSize.y)*cells; uv=(floor(uv*g)+0.5)/g; }',
   '  vec3 col=texture2D(uMap,uv).rgb;',
   '  if(uHalf>0.01){',
@@ -180,7 +194,7 @@ body.over #drop{display:flex}
   '    vec3 h=mix(vec3(0.96,0.94,0.9),ink,m);',
   '    col=mix(col,h,uHalf);',
   '  }',
-  '  vec4 pt=texture2D(uPaint,vUv); float pa=pt.a; col=col*(1.0-pa)+pt.rgb;',
+  '  vec4 pt=texture2D(uPaint,vUv); float pa=pt.a; col=col*(1.0-pa)+pt.rgb; col=scorch(col,bpn);',
   '  vec2 gd=vec2(dFdx(ms),dFdy(ms)); vec2 ed=gd/(length(gd)+1e-4);',
   '  float lip=1.0-smoothstep(0.52,0.78,ms+nz*0.35);',
   '  vec2 Ld=normalize(uLightPos.xy+vec2(0.0001)); float msh=texture2D(uRipS,vUv+Ld*0.075/uSize).r;',
@@ -204,7 +218,7 @@ body.over #drop{display:flex}
   '  vec3 n=normalize(vN);',
   '  if(uFlat>0.0){ vec3 fn=normalize(cross(dFdx(vWPos),dFdy(vWPos))); if(dot(fn,n)<0.0) fn=-fn; n=normalize(mix(n,fn,uFlat)); }',
   '  n=normalize(n+vec3(ed*lip*1.6,0.0));',
-  '  if(!gl_FrontFacing){ n=-n; col=vec3(0.92,0.9,0.85); }',
+  '  if(!gl_FrontFacing){ n=-n; col=scorch(vec3(0.92,0.9,0.85),bpn); }',
   '  float gr=hash(floor(vUv*uSize*160.));',
   '  n=normalize(n+vec3(gr-0.5,hash(vUv*91.7+3.1)-0.5,0.)*0.06);',
   '  vec3 L=normalize(uLightPos-vWPos), V=normalize(cameraPosition-vWPos), H=normalize(L+V);',
@@ -217,6 +231,10 @@ body.over #drop{display:flex}
   '  float fa=clamp(fl*6.0,0.0,1.0);',
   '  outc+=vec3(1.0,0.45,0.08)*emA*1.5;',
   '  outc+=vec3(0.25,0.1,0.02)*uFire*(0.8+0.2*sin(uTime*13.0));',
+  '  float bgl=bt.g*smoothstep(0.5,0.92,bpn)*(0.72+0.28*sin(uTime*12.0+hash(floor(vUv*uSize*60.0))*6.28));',
+  '  outc+=mix(vec3(0.95,0.2,0.03),vec3(1.0,0.78,0.3),smoothstep(0.78,0.93,bpn))*bgl*1.7;',
+  '  vec2 bo=vec2(6.0)/uBR; float hl=(texture2D(uBurn,vUv+vec2(bo.x,0.0)).g+texture2D(uBurn,vUv-vec2(bo.x,0.0)).g+texture2D(uBurn,vUv+vec2(0.0,bo.y)).g+texture2D(uBurn,vUv-vec2(0.0,bo.y)).g)*0.25;',
+  '  outc+=vec3(1.0,0.36,0.06)*hl*0.28*(0.8+0.2*sin(uTime*9.0+vUv.x*30.0));',
   '  gl_FragColor=vec4(clamp(outc,0.,1.5),1.); }'
   ].join('\n');
 
@@ -880,8 +898,10 @@ function presetShape(name, W, L, rnd = Math.random) {
   function ripRestore(){
     if(!ripPresent) return; ripClearScraps(); ripPresent.fill(255); ripDataA.fill(255); ripDataB.fill(255); ripTex.needsUpdate=true; ripTexS.needsUpdate=true;
   }
-  function ripTorn(uv){ // is this spot of the poster already gone?
-    if(!ripPresent||!uv) return false;
+  function ripTorn(uv){ // is this spot of the poster already gone (torn off or burnt away)?
+    if(!uv) return false;
+    if(bB&&bB[Math.min(BH-1,Math.max(0,Math.floor(uv.y*BH)))*BW+Math.min(BW-1,Math.max(0,Math.floor(uv.x*BW)))]>=0.95) return true;
+    if(!ripPresent) return false;
     var x=Math.min(ripMW-1,Math.max(0,Math.floor(uv.x*ripMW))),y=Math.min(ripMH-1,Math.max(0,Math.floor(uv.y*ripMH)));
     return ripPresent[y*ripMW+x]===0;
   }
@@ -1079,6 +1099,138 @@ function presetShape(name, W, L, rnd = Math.random) {
     if(changed) sprayTex.needsUpdate=true;
   }
 
+  // ---- flame mode: hold the nozzle on the paper and it scorches, catches, chars and burns through; flames, smoke and sparks rise from the burning edge ----
+  var burnOn=false, burnDown=false, bnX=0, bnY=0, burnT=0.3, burnSpread=0.35;
+  var BW=2,BH=2,bB=null,bF=null,bGen=null,bRate=null,bDry=null,bHeat=null,bGlow=null,bData=null,bTex=null,bAct=[],bInAct=null,bDirty=false;
+  var burnBlank=new THREE.DataTexture(new Uint8Array([0,0,0,255]),1,1,THREE.RGBAFormat); burnBlank.needsUpdate=true;
+  uniforms.uBurn={value:burnBlank}; uniforms.uBR={value:new THREE.Vector2(1,1)};
+  var psScale={value:1}, psFlame=null, psSmoke=null, psSpark=null, _bv=new THREE.Vector3();
+  function burnRadius(){ return 0.08+0.85*burnT*burnT; } // world units
+  function burnReset(){ // a fresh, unburnt sheet (also used when a new poster arrives)
+    var m=320; BW=W>=H?m:Math.max(8,Math.round(m*W/H)); BH=W>=H?Math.max(8,Math.round(m*H/W)):m;
+    var n=BW*BH,i;
+    bB=new Float32Array(n); bF=new Uint8Array(n); bGen=new Uint8Array(n); bHeat=new Float32Array(n); bGlow=new Float32Array(n);
+    bRate=new Float32Array(n); bDry=new Float32Array(n); bInAct=new Uint8Array(n); bAct=[]; bData=new Uint8Array(n*4);
+    for(i=0;i<n;i++){ bRate[i]=0.75+Math.random()*0.6; bDry[i]=0.25+Math.random()*1.5; }
+    if(bTex) bTex.dispose();
+    bTex=new THREE.DataTexture(bData,BW,BH,THREE.RGBAFormat); bTex.minFilter=bTex.magFilter=THREE.LinearFilter; bTex.generateMipmaps=false; bTex.needsUpdate=true;
+    uniforms.uBurn.value=bTex; uniforms.uBR.value.set(BW,BH); bDirty=false;
+    [psFlame,psSmoke,psSpark].forEach(function(p){ if(p) psClear(p); });
+  }
+  function igniteCell(i,gen){
+    bF[i]=1; bGen[i]=gen; bHeat[i]=1; if(bB[i]<0.05) bB[i]=0.05;
+    if(!bInAct[i]){ bInAct[i]=1; bAct.push(i); }
+  }
+  // the nozzle's heat: cells under it warm up (scorch) and, after a moment, catch
+  function burnHeat(cx,cy,dt){
+    var R=burnRadius()*BW/W,x,y,i,d,w,dx,dy,maxGen=2+Math.round(burnSpread*110);
+    var y0=Math.max(0,Math.floor(cy-R)),y1=Math.min(BH-1,Math.ceil(cy+R)),x0=Math.max(0,Math.floor(cx-R)),x1=Math.min(BW-1,Math.ceil(cx+R));
+    for(y=y0;y<=y1;y++) for(x=x0;x<=x1;x++){
+      dx=x-cx; dy=y-cy; d=Math.sqrt(dx*dx+dy*dy)/R; if(d>=1) continue;
+      i=y*BW+x; if(bF[i]||bB[i]>=0.5) continue;
+      w=1-d*d; bHeat[i]+=dt*3.4*w*w*bDry[i]*0.8;
+      if(bB[i]<0.2){ var sc=Math.min(0.2,bHeat[i]*0.2); if(sc>bB[i]){ bB[i]=sc; bData[4*i]=(sc*255)|0; bDirty=true; } }
+      if(bHeat[i]>=1){ igniteCell(i,maxGen); }
+    }
+  }
+  var NB=[[-1,0,1],[1,0,1],[0,-1,1],[0,1,1],[-1,-1,0.7],[1,-1,0.7],[-1,1,0.7],[1,1,0.7]];
+  function burnFire(dt){
+    var k,i,j,x,y,q,nb,pr=(6+burnSpread*40)*dt,cap,e=Math.exp(-2.5*dt);
+    for(k=bAct.length-1;k>=0;k--){
+      i=bAct[k];
+      if(bF[i]){
+        bB[i]+=dt*1.15*bRate[i]; bGlow[i]=1;
+        cap=bGen[i]>=2?1:(bGen[i]===1?0.8:0.62);
+        if(bB[i]>=cap){ bB[i]=cap; bF[i]=0; }
+        else if(bB[i]>0.12&&bGen[i]>0){
+          x=i%BW; y=(i/BW)|0;
+          for(q=0;q<8;q++){
+            nb=NB[q]; var nx=x+nb[0],ny=y+nb[1]; if(nx<0||ny<0||nx>=BW||ny>=BH) continue;
+            j=ny*BW+nx; if(bF[j]||bB[j]>=0.3) continue;
+            if(Math.random()<pr*bDry[j]*nb[2]) igniteCell(j,bGen[i]-1);
+          }
+        }
+      } else bGlow[i]*=e;
+      bData[4*i]=Math.min(255,(bB[i]*255)|0); bData[4*i+1]=(bGlow[i]*255)|0;
+      if(!bF[i]&&bGlow[i]<0.02){ bGlow[i]=0; bData[4*i+1]=0; bInAct[i]=0; bAct[k]=bAct[bAct.length-1]; bAct.pop(); }
+    }
+    return true;
+  }
+  // ----- particles: flames and sparks glow (additive), smoke darkens (normal blend) -----
+  function makePS(N,kind,blend){
+    var g=new THREE.BufferGeometry(),pos=new Float32Array(N*3),sz=new Float32Array(N),ag=new Float32Array(N),i;
+    for(i=0;i<N;i++) ag[i]=1;
+    g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setAttribute('aSize',new THREE.BufferAttribute(sz,1)); g.setAttribute('aAge',new THREE.BufferAttribute(ag,1));
+    var m=new THREE.ShaderMaterial({uniforms:{uScale:psScale,uKind:{value:kind}},transparent:true,depthWrite:false,blending:blend,
+      vertexShader:'attribute float aSize; attribute float aAge; uniform float uScale; varying float vAge; void main(){ vAge=aAge; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_Position=projectionMatrix*mv; gl_PointSize=min(160.0,aSize*uScale/max(0.05,-mv.z)); }',
+      fragmentShader:['uniform float uKind; varying float vAge;','void main(){ vec2 c=gl_PointCoord-0.5; float d=length(c)*2.0; if(d>1.0) discard; float a=1.0-d; a*=a; vec3 col; float al;',
+        ' if(uKind<0.5){ col=mix(vec3(1.0,0.92,0.55),vec3(1.0,0.45,0.08),smoothstep(0.0,0.4,vAge)); col=mix(col,vec3(0.55,0.08,0.02),smoothstep(0.4,1.0,vAge)); al=a*(1.0-vAge)*0.85; }',
+        ' else if(uKind<1.5){ col=vec3(0.13,0.12,0.12); al=a*0.34*smoothstep(0.0,0.15,vAge)*(1.0-vAge); }',
+        ' else { col=mix(vec3(1.0,0.85,0.4),vec3(1.0,0.3,0.05),vAge); al=smoothstep(1.0,0.25,d)*(1.0-vAge); }',
+        ' gl_FragColor=vec4(col,al); }'].join('\n')});
+    var pts=new THREE.Points(g,m); pts.frustumCulled=false; pts.renderOrder=5; scene.add(pts);
+    return {g:g,pos:pos,sz:sz,ag:ag,N:N,vx:new Float32Array(N),vy:new Float32Array(N),vz:new Float32Array(N),life:new Float32Array(N),age:ag,s0:new Float32Array(N),grow:new Float32Array(N),next:0,alive:0,was:false};
+  }
+  function psClear(p){ p.ag.fill(1); p.sz.fill(0); p.alive=0; p.was=true; }
+  function psAdd(p,x,y,z,vx,vy,vz,life,size,grow){
+    var i=p.next; p.next=(i+1)%p.N; p.pos[3*i]=x; p.pos[3*i+1]=y; p.pos[3*i+2]=z; p.vx[i]=vx; p.vy[i]=vy; p.vz[i]=vz;
+    p.life[i]=life; p.age[i]=0; p.s0[i]=size; p.grow[i]=grow; p.sz[i]=size;
+  }
+  function psStep(p,dt,grav,drag){
+    var i,a=0,dk=Math.exp(-drag*dt);
+    for(i=0;i<p.N;i++){
+      if(p.age[i]>=1) continue;
+      p.age[i]+=dt/p.life[i];
+      if(p.age[i]>=1){ p.age[i]=1; p.sz[i]=0; continue; }
+      p.vy[i]+=grav*dt; p.vx[i]*=dk; p.vz[i]*=dk; if(drag>0) p.vy[i]*=dk;
+      p.pos[3*i]+=p.vx[i]*dt; p.pos[3*i+1]+=p.vy[i]*dt; p.pos[3*i+2]+=p.vz[i]*dt;
+      p.sz[i]=p.s0[i]*(1+p.grow[i]*p.age[i]); a++;
+    }
+    p.alive=a;
+    if(a>0||p.was){ p.g.attributes.position.needsUpdate=true; p.g.attributes.aSize.needsUpdate=true; p.g.attributes.aAge.needsUpdate=true; p.was=a>0; }
+  }
+  function burnEmit(u,v,heavy){ // a flame (and now and then smoke or a spark) from a spot of the burning paper
+    if(ripPresent&&ripPresent[Math.min(ripMH-1,Math.floor(v*ripMH))*ripMW+Math.min(ripMW-1,Math.floor(u*ripMW))]===0) return;
+    simPt((u-0.5)*W,(v-0.5)*H,_o,0.03); _bv.set(_o.x,_o.y,_o.z); poster.localToWorld(_bv);
+    var r=Math.random;
+    psAdd(psFlame,_bv.x+(r()-0.5)*0.04,_bv.y,_bv.z,(r()-0.5)*0.18,0.5+r()*0.7,(r()-0.2)*0.12,0.4+r()*0.45,0.17+r()*0.2,0.7);
+    if(r()<0.28) psAdd(psSmoke,_bv.x,_bv.y+0.05,_bv.z,(r()-0.5)*0.12,0.35+r()*0.35,0.04,1.5+r()*1.2,0.22+r()*0.15,2.6);
+    if(r()<0.1) psAdd(psSpark,_bv.x,_bv.y,_bv.z+0.02,(r()-0.5)*0.9,0.5+r()*1.3,(r()-0.5)*0.3,0.7+r()*1.2,0.045+r()*0.04,0);
+  }
+  function burnFx(dt,hit){
+    var n=bAct.length,t,tries,i;
+    if(n&&!shred){
+      group.updateMatrixWorld(true);
+      tries=Math.min(22,3+((n/25)|0));
+      for(t=0;t<tries;t++){ i=bAct[(Math.random()*n)|0]; if(!bF[i]||bB[i]<0.3) continue; burnEmit(((i%BW)+0.5)/BW,(((i/BW)|0)+0.5)/BH); }
+    }
+    if(hit){ // the jet itself, leaving the nozzle even before anything has caught
+      var R=burnRadius(),k,r=Math.random,a,rr; camera.getWorldDirection(dirV);
+      for(k=0;k<7;k++){
+        a=r()*6.2832; rr=Math.sqrt(r())*R*0.85;
+        psAdd(psFlame,hit.x+Math.cos(a)*rr-dirV.x*0.04,hit.y+Math.sin(a)*rr*0.6,hit.z-dirV.z*0.04+0.02,(r()-0.5)*0.3,0.6+r()*1.0,(r()-0.5)*0.15,0.3+r()*0.35,0.1+R*0.25*r()+0.06,0.8);
+      }
+      if(r()<0.5) psAdd(psSpark,hit.x+(r()-0.5)*R,hit.y,hit.z+0.03,(r()-0.5)*1.0,0.6+r()*1.4,(r()-0.5)*0.3,0.7+r()*1.0,0.05+r()*0.04,0);
+    }
+    psStep(psFlame,dt,0.9,1.2); psStep(psSmoke,dt,0.15,0.9); psStep(psSpark,dt,-0.7,0.6);
+  }
+  psFlame=makePS(1600,0,THREE.AdditiveBlending); psSmoke=makePS(800,1,THREE.NormalBlending); psSpark=makePS(500,2,THREE.AdditiveBlending);
+  function stepBurn(dt){
+    if(!bB||!sheet) return;
+    if(burnDown&&mode!=='burn') burnDown=false;
+    psScale.value=renderer.domElement.height/(2*tanHalf);
+    var hit=null;
+    if(burnOn&&burnDown&&!shred&&!sheet.tgt){
+      var r=canvas.getBoundingClientRect();
+      ndc.set((bnX-r.left)/r.width*2-1,-((bnY-r.top)/r.height)*2+1); ray.setFromCamera(ndc,camera); group.updateMatrixWorld(true);
+      var hs=ray.intersectObject(poster).filter(function(h){return !ripTorn(h.uv);});
+      if(hs.length){ hit=hs[0].point; burnHeat(hs[0].uv.x*BW,hs[0].uv.y*BH,dt); bDirty=true; }
+    }
+    if(bAct.length){ burnFire(dt); bDirty=true; }
+    if(bDirty){ bTex.needsUpdate=true; bDirty=false; }
+    burnFx(dt,hit);
+  }
+
   function setImage(img){
     var tex=new THREE.Texture(img); tex.needsUpdate=true; tex.minFilter=THREE.LinearMipmapLinearFilter;
     tex.anisotropy=renderer.capabilities.getMaxAnisotropy();
@@ -1089,7 +1241,7 @@ function presetShape(name, W, L, rnd = Math.random) {
     poster.geometry.dispose();
     folds=[];foldAnim=null;foldBtns(); sheet=new Sheet(W,H); poster.geometry=new THREE.PlaneGeometry(W,H,sheet.nx,sheet.ny); poster.frustumCulled=false;
     uniforms.uSize.value.set(W,H);
-    ripResetMask(); sprayReset();
+    ripResetMask(); sprayReset(); burnReset();
     if(shred) restoreShred();
     setFlameGeom();
     shadow.scale.set(W*1.15,H*1.15,1);
@@ -1315,6 +1467,8 @@ function presetShape(name, W, L, rnd = Math.random) {
       camera.getWorldDirection(dirV); dragPlane.setFromNormalAndCoplanarPoint(dirV,wStart);
       var root=mh[0].object; while(root.parent&&root.parent!==group) root=root.parent;
       select(root); mStart0.copy(group.worldToLocal(wStart.clone())); mPos0.copy(root.position);
+    } else if(hits.length&&burnOn){
+      mode='burn'; burnDown=true; bnX=e.clientX; bnY=e.clientY;
     } else if(hits.length&&sprayOn){
       mode='spray'; sprayDown=true; spX=e.clientX; spY=e.clientY; sprayLast=null;
     } else if(hits.length&&ripOn){
@@ -1347,6 +1501,7 @@ function presetShape(name, W, L, rnd = Math.random) {
       var nx3=rsc.start.x+wCur.x-wStart.x, ny3=rsc.start.y+wCur.y-wStart.y, now3=performance.now(), dt3=Math.max(8,now3-rsc.lastT)/1000;
       rsc.vx=Math.max(-14,Math.min(14,rsc.vx*0.5+0.5*(nx3-rsc.mesh.position.x)/dt3)); rsc.vy=Math.max(-14,Math.min(14,rsc.vy*0.5+0.5*(ny3-rsc.mesh.position.y)/dt3));
       rsc.mesh.position.x=nx3; rsc.mesh.position.y=ny3; rsc.lastT=now3;
+    } else if(mode==='burn'){ bnX=e.clientX; bnY=e.clientY;
     } else if(mode==='spray'){ spX=e.clientX; spY=e.clientY;
     } else if(mode==='model'&&sel){
       var r2=canvas.getBoundingClientRect();
@@ -1370,6 +1525,7 @@ function presetShape(name, W, L, rnd = Math.random) {
   });
   function up(){
     if(mode==='spray'){ sprayDown=false; sprayLast=null; }
+    if(mode==='burn') burnDown=false;
     if(mode==='bend'&&sheet)sheet.release();
     if(mode==='rip'&&ripScrap){ // let go: the torn piece falls, carrying the speed it was dragged at
       var rs=ripScrap; rs.held=false; if(performance.now()-rs.lastT>90){ rs.vx*=0.2; rs.vy*=0.2; }
@@ -1654,12 +1810,29 @@ function presetShape(name, W, L, rnd = Math.random) {
   canvas.addEventListener('pointermove',function(e){ spRX=e.clientX; spRY=e.clientY; sprayRingUpdate(); });
   canvas.addEventListener('pointerleave',function(){ spRX=-1; sprayRingUpdate(); });
 
+  // ---- flame mode controls ----
+  var burnBtn=document.getElementById('burn'), burnRing=document.getElementById('burnRing'), bRX=-1, bRY=-1;
+  function burnRingUpdate(){
+    if(!burnOn||bRX<0){ burnRing.style.display='none'; return; }
+    var r=canvas.getBoundingClientRect(), dpx=2*burnRadius()*(r.height/(2*camera.position.z*tanHalf));
+    burnRing.style.width=burnRing.style.height=dpx+'px'; burnRing.style.left=(bRX-dpx/2)+'px'; burnRing.style.top=(bRY-dpx/2)+'px'; burnRing.style.display='block';
+  }
+  function setBurn(on){ burnOn=on; burnBtn.textContent='Flame mode: '+(on?'On':'Off'); canvas.classList.toggle('burn',on); if(!on) burnDown=false; burnRingUpdate(); }
+  var ripToggle2=ripBtn.onclick; ripBtn.onclick=function(){ if(!ripOn&&burnOn) setBurn(false); ripToggle2(); };
+  var sprayToggle2=sprayBtn.onclick; sprayBtn.onclick=function(){ if(!sprayOn&&burnOn) setBurn(false); sprayToggle2(); };
+  burnBtn.onclick=function(){ if(!burnOn){ if(ripOn) ripBtn.onclick(); if(sprayOn) setSpray(false); } setBurn(!burnOn); };
+  document.getElementById('burnReset').onclick=burnReset;
+  bind('burnR','vBnR',function(v){return Math.round(v*100)+'%'},function(v){burnT=v; burnRingUpdate();});
+  bind('burnS','vBnS',function(v){return Math.round(v*100)+'%'},function(v){burnSpread=v;});
+  canvas.addEventListener('pointermove',function(e){ bRX=e.clientX; bRY=e.clientY; burnRingUpdate(); });
+  canvas.addEventListener('pointerleave',function(){ bRX=-1; burnRingUpdate(); });
+
   var clock=new THREE.Clock();
   function tick(){
     var dt=Math.min(clock.getDelta(),1/30);
     uniforms.uTime.value+=dt;
     if(!shred) stepSheet(dt);
-    stepScraps(dt); stepSpray(dt);
+    stepScraps(dt); stepSpray(dt); stepBurn(dt);
     rot.x+=(rotT.x-rot.x)*0.12; rot.y+=(rotT.y-rot.y)*0.12;
     var t=uniforms.uTime.value, wd=uniforms.uWind.value, gs=0.65+0.35*Math.sin(t*0.7)*Math.sin(t*0.31+1);
     group.rotation.set(rot.x+Math.sin(t*1.3)*0.025*wd*gs, rot.y+Math.sin(t*0.9)*0.06*wd*gs, Math.sin(t*1.1)*0.04*wd*gs);
